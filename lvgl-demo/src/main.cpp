@@ -6,6 +6,7 @@
 
 #include "esp_lv_adapter_arduino.h"
 #include "dashboard_ui.h"
+#include "dashboard_data.h"
 
 using namespace esp_panel::drivers;
 using namespace esp_panel::board;
@@ -68,6 +69,8 @@ void setup()
     ESP_ERROR_CHECK(esp_lv_adapter_start());
     Serial.printf("[s4] adapter started\n");
 
+    dashboard_data_init();
+
     ESP_ERROR_CHECK(esp_lv_adapter_lock(-1));
     dashboard_ui_init();
     esp_lv_adapter_unlock();
@@ -80,6 +83,7 @@ void loop()
 {
     static uint32_t n = 0;
     /* LVGL runs in the adapter's own task; don't touch it from here */
+    dashboard_data_tick();
     if ((++n % 50) == 0) {
         Serial.printf("[hb] alive t=%lu ms\n", (unsigned long)millis());
         Serial.flush();
