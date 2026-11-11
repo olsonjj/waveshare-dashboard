@@ -1,0 +1,21 @@
+# Waveshare reference clone (has its own .git; kept out of this repo)
+demos/
+
+# PlatformIO build artifacts
+.pio/
+pio-build/
+*.elf
+*.bin
+*.map
+
+# Credentials — never commit these
+secrets.h
+**/secrets.h
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Misc
+*.7z
+*.log
