@@ -363,3 +363,22 @@ so incremental builds re-flashed a stale stamp - the board clock ended up
 pre_build_stamp.py (PIO extra_script): include/build_stamp.h is regenerated
 with the host time every build, forcing a fresh seed stamp. Verified: boot
 seeded to within seconds of real time; snapshot loaded across the reflash.
+
+### Noise saga CLOSED: PCLK 13 MHz (2026-11-15, user-verified)
+
+Direct-mode fetches at stock PCLK 16 MHz still showed horizontal glitching
+during the ~13-30 s TLS windows. Pulled the documented escalation lever:
+RGB PCLK 16 -> 13 MHz (both esp_panel_board_custom_conf.h copies, killing
+the known 16-vs-21-MHz drift). Result: three consecutive 5-min poll cycles
+(~13-14 s of radio each, serial-timestamped) observed by the user with ZERO
+screen corruption. Bonus: fetch GET phases got ~3x faster (~6 s vs ~17 s) -
+radio and the PSRAM bus were contending more than we knew.
+
+Final noise model, the whole story:
+- noise tracks radio airtime + memory-bus pressure, not print volume
+- modem sleep wakeups: fixed permanently by setSleep(false)
+- fetch bursts: fixed by PCLK 13 (slack in the PSRAM bus beats fighting it)
+- direct mode is now VIABLE: self-contained board, no relay dependency,
+  ~13 s radio per 5-min poll, quiet panel, user-verified
+The refresh rate at 13 MHz is ~81% of 16 MHz - imperceptible on this
+dashboard. Bounce x20 lever remains unexercised (spare, documented).

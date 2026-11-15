@@ -81,7 +81,10 @@
     #define ESP_PANEL_BOARD_LCD_RGB_USE_CONTROL_PANEL       (0) // 0/1. Typically set to 1
 
     /* For refresh panel (RGB) */
-    #define ESP_PANEL_BOARD_LCD_RGB_CLK_HZ          (16 * 1000 * 1000)
+    #define ESP_PANEL_BOARD_LCD_RGB_CLK_HZ          (13 * 1000 * 1000)
+                                                            // 13 MHz: noise lever pulled 2026-11-15 - at 16 MHz the RGB refresh
+                                                            // starves during radio bursts (direct Envoy TLS fetches, ~30 s windows).
+                                                            // Both conf copies (lib/ and src/) set to the same value on purpose.
                                                             // To increase the upper limit of the PCLK, see: https://docs.espressif.com/projects/esp-faq/en/latest/software-framework/peripherals/lcd.html#how-can-i-increase-the-upper-limit-of-pclk-settings-on-esp32-s3-while-ensuring-normal-rgb-screen-display
     #define ESP_PANEL_BOARD_LCD_RGB_HPW             (4)
     #define ESP_PANEL_BOARD_LCD_RGB_HBP             (8)
