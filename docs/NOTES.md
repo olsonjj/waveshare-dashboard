@@ -346,3 +346,20 @@ First direct fetch: handshake 8.7 s + GET 17.3 s + inverters 0.35 s = ~26 s
 radio window per 5-min poll (better than the 21-29 s/phase measured earlier;
 variance unexplained). Panel-noise evaluation at stock PCLK ongoing; next
 levers ready: PCLK 16->13, bounce x20, then TLS-slowdown root-cause.
+
+### Greptile round 2 + stale build-stamp discovery (2026-11-15)
+
+Round-2 review flagged second-order consequences of the straddle-carry fix:
+long poll outages would dump all missed production into the recovery hour's
+bar (both paths). Fixed with a gap gate: last_ts (epoch of last accepted
+sample) is persisted; the carry only fires on an adjacent hour boundary with
+a fresh sample (<=900 s direct / <=180 s relay), else the hour starts at the
+current reading and missed hours stay -1. Plus: one-time migration of the
+legacy five-key NVS snapshot into the HistSnap blob (ver 2).
+
+Clock bug found while validating: __DATE__/__TIME__ carry the .o COMPILE time,
+so incremental builds re-flashed a stale stamp - the board clock ended up
+1.5 h behind after a main.cpp-untouched rebuild. Fixed with
+pre_build_stamp.py (PIO extra_script): include/build_stamp.h is regenerated
+with the host time every build, forcing a fresh seed stamp. Verified: boot
+seeded to within seconds of real time; snapshot loaded across the reflash.

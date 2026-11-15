@@ -279,12 +279,14 @@ static float    s_hist_kwh[24];
 static int32_t  s_hist_wh_start[24];
 static int32_t  s_hist_last_wh = -1;
 static int      s_hist_last_hour = -1;
+static int64_t  s_hist_last_ts = 0;       /* epoch of last accepted sample; 0 = unknown */
 
 /* The whole snapshot is stored as ONE versioned blob: a power failure or
  * reset between five separate Preferences commits used to pair a new date
  * with yesterday's buckets (midnight rollover then never fired).
  * Packed so the NVS byte size is compiler-independent. */
-#define HIST_SNAP_VER 1u
+#define HIST_SNAP_VER 2u
+#define HIST_CARRY_FRESH_S 900                    /* 3 poll intervals of 5 min */
 struct __attribute__((packed)) HistSnap {
     uint8_t  ver;
     char     date[11];                     /* "YYYY-MM-DD" + NUL          */
@@ -292,7 +294,56 @@ struct __attribute__((packed)) HistSnap {
     int32_t  wh_start[24];
     int32_t  last_wh;
     int32_t  last_hour;
+    int64_t  last_ts;                     /* epoch of last sample; 0 = unknown.
+                                           * v2: gates the hour-boundary carry so
+                                           * energy from a skipped poll outage is
+                                           * not all dumped into the recovery hour */
 };
+
+/* one-time migration from the pre-blob firmware's five separate legacy keys
+ * ("date" String, "kwh" bytes, "whstart" bytes, "lastwh", "lasthour"):
+ * only tried when the "snap" blob is absent or invalid, so a valid v2
+ * snapshot is never overwritten. last_ts is unknown (0) — the carry gate
+ * simply stays closed until the first accepted sample of the new firmware. */
+static void hist_migrate_legacy(void)
+{
+    if (s_hist.getBytesLength("kwh") != 24 * sizeof(float))
+        return;
+    String date = s_hist.getString("date", "");
+    if (date.length() != 10)
+        return;
+    if (s_hist.getBytesLength("whstart") != 24 * sizeof(int32_t))
+        return;
+
+    HistSnap snap;
+    memset(&snap, 0, sizeof(snap));
+    snap.ver = HIST_SNAP_VER;
+    if (s_hist.getBytes("kwh", snap.kwh, sizeof(snap.kwh)) != sizeof(snap.kwh)
+        || s_hist.getBytes("whstart", snap.wh_start, sizeof(snap.wh_start)) != sizeof(snap.wh_start))
+        return;                            /* read failed: fresh start */
+    snap.last_wh   = s_hist.getInt("lastwh", -1);
+    snap.last_hour = s_hist.getInt("lasthour", -1);
+    snap.last_ts   = 0;
+    strlcpy(snap.date, date.c_str(), sizeof(snap.date));
+
+    s_hist.putBytes("snap", &snap, sizeof(snap));
+
+    /* adopt locally exactly like a loaded snapshot */
+    memcpy(s_hist_kwh, snap.kwh, sizeof(s_hist_kwh));
+    memcpy(s_hist_wh_start, snap.wh_start, sizeof(s_hist_wh_start));
+    s_hist_last_wh   = snap.last_wh;
+    s_hist_last_hour = snap.last_hour;
+    s_hist_last_ts   = snap.last_ts;
+    memcpy(s_hist_date, snap.date, sizeof(s_hist_date));
+    s_hist_date[sizeof(s_hist_date) - 1] = '\0';
+
+    s_hist.remove("date");
+    s_hist.remove("kwh");
+    s_hist.remove("whstart");
+    s_hist.remove("lastwh");
+    s_hist.remove("lasthour");
+    Serial.println("[data] hourly history: migrated legacy snapshot");
+}
 
 static void hist_load(void)
 {
@@ -305,16 +356,23 @@ static void hist_load(void)
         memcpy(s_hist_wh_start, snap.wh_start, sizeof(s_hist_wh_start));
         s_hist_last_wh   = snap.last_wh;
         s_hist_last_hour = snap.last_hour;
+        s_hist_last_ts   = snap.last_ts;
         memcpy(s_hist_date, snap.date, sizeof(s_hist_date));
         s_hist_date[sizeof(s_hist_date) - 1] = '\0';
         Serial.printf("[data] hourly history loaded: %s (%d buckets set)\n",
                       s_hist_date,
                       s_hist_last_hour >= 0 ? s_hist_last_hour + 1 : 0);
     } else {
-        /* wrong size or unknown version: start fresh */
+        /* wrong size (old ver-1 blob) or unknown version: try the five-key
+         * legacy migration, else start fresh */
         for (int i = 0; i < 24; i++) { s_hist_kwh[i] = -1.0f; s_hist_wh_start[i] = -1; }
         s_hist_date[0] = '\0';
-        Serial.println("[data] hourly history: none stored");
+        s_hist_last_wh = -1;
+        s_hist_last_hour = -1;
+        s_hist_last_ts = 0;
+        hist_migrate_legacy();
+        if (s_hist_date[0] == '\0')
+            Serial.println("[data] hourly history: none stored");
     }
 }
 
@@ -345,9 +403,18 @@ static void hist_apply(uint32_t wh)
                           s_hist_last_hour,
                           (double)s_hist_kwh[s_hist_last_hour]);
         }
-        /* seed the new hour from the last sample of the old hour, else the
-           energy between the sample boundary and the first read here is lost */
-        s_hist_wh_start[hour] = (s_hist_last_wh >= 0) ? s_hist_last_wh : (int32_t)wh;
+        /* seed the new hour from the last sample of the old hour — but only
+           when the boundary was really the adjacent hour AND the previous
+           sample is fresh (gate vs. now_epoch). After a poll outage several
+           hours wide, carrying the stale wh would dump ALL of the missed
+           energy into this one recovery bar; instead start at the current
+           wh and the skipped hours stay -1 (no bar, not a wrong bar). */
+        bool hour_adjacent = (s_hist_last_hour + 1) % 24 == hour;
+        bool sample_fresh = s_hist_last_ts > 0
+                            && (time_t)s_hist_last_ts <= now
+                            && (now - (time_t)s_hist_last_ts) <= HIST_CARRY_FRESH_S;
+        s_hist_wh_start[hour] = (s_hist_last_wh >= 0 && hour_adjacent && sample_fresh)
+                                ? s_hist_last_wh : (int32_t)wh;
         s_hist_last_hour = hour;
     }
     if (s_hist_wh_start[hour] >= 0)                 /* live partial */
@@ -361,6 +428,8 @@ static void hist_apply(uint32_t wh)
     memcpy(snap.wh_start, s_hist_wh_start, sizeof(snap.wh_start));
     snap.last_wh   = s_hist_last_wh;
     snap.last_hour = s_hist_last_hour;
+    s_hist_last_ts = (int64_t)now;         /* every accepted sample is fresh */
+    snap.last_ts   = s_hist_last_ts;
     s_hist.putBytes("snap", &snap, sizeof(snap));
 }
 #endif /* !SOLAR_POLL_VIA_RELAY */

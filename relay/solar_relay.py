@@ -139,10 +139,11 @@ def _now_local():
 
 def _new_day(date):
     return {"date": date, "hourly_kwh": [-1.0] * 24, "wh_at_hour_start": [-1] * 24,
-            "last_wh": -1, "last_hour": -1}
+            "last_wh": -1, "last_hour": -1, "last_ts": -1.0}
 
 def _apply_sample(state, date, hour, wh):
     """Fold one wh_today sample into the day state; returns (new) state."""
+    now_ts = time.time()           # sampled once: gap test + last_ts stamp use it
     if date != state["date"]:      # local-date rollover: old day is already saved
         state = _new_day(date)
     prev = state["last_hour"]
@@ -151,13 +152,23 @@ def _apply_sample(state, date, hour, wh):
             state["hourly_kwh"][prev] = round(
                 (state["last_wh"] - state["wh_at_hour_start"][prev]) / 1000.0, 3)
         # start the new hour at the previous sample's wh_today, so the
-        # straddle energy across the boundary lands in the closed bucket
-        state["wh_at_hour_start"][hour] = state["last_wh"] if state["last_wh"] >= 0 else wh
+        # straddle energy across the boundary lands in the closed bucket --
+        # but only for a tight boundary (exactly one hour step, and the
+        # boundary sample arrived within a few sampler intervals). After an
+        # outage the gap swallows earlier hours, so those stay -1 and the
+        # new hour starts at the current reading instead.
+        tight = (hour == prev + 1) or (prev == 23 and hour == 0)
+        nearby = state["last_ts"] >= 0 and (now_ts - state["last_ts"]) <= 180
+        if tight and nearby:
+            state["wh_at_hour_start"][hour] = state["last_wh"] if state["last_wh"] >= 0 else wh
+        else:
+            state["wh_at_hour_start"][hour] = wh
         state["last_hour"] = hour
     if state["wh_at_hour_start"][hour] >= 0:                     # live partial
         state["hourly_kwh"][hour] = round(
             (wh - state["wh_at_hour_start"][hour]) / 1000.0, 3)
     state["last_wh"] = wh
+    state["last_ts"] = now_ts
     return state
 
 def _prune_locked():
@@ -188,6 +199,7 @@ def _load_history():
             e["wh_at_hour_start"] = [int(x) for x in e["wh_at_hour_start"]]
             e["last_wh"] = int(e.get("last_wh", -1))
             e["last_hour"] = int(e.get("last_hour", -1))
+            e["last_ts"] = float(e.get("last_ts", -1.0))
             _days[d] = e
     date, _ = _now_local()
     _hist = _days.get(date) or _new_day(date)
