@@ -100,6 +100,9 @@ Note: `pio`'s esptool wrapper sometimes needs the pyserial of the PlatformIO env
 
 - Widgets demo @ PCLK 21 MHz, default adapter task (prio 2, core 1): **~33 FPS, LVGL “CPU” ~99%**
   (CPU% = LVGL busy-time, not system-wide — expected with a demo that animates everything).
+- v2 dashboard with `LV_DISP_DEF_REFR_PERIOD` 30 → **20 ms** (2025-11-14, user-verified on device):
+  interaction FPS 33 → **50** and noticeably faster tab switching; theoretical refresh cap = 1000/20.
+  At rest nothing changes (LVGL only wakes on invalidations). Keep in sync across all lv_conf copies.
 - Widgets demo @ priority 4/core 0: regressed to ~3 FPS with tearing (core-0 contention, see above).
   Known-good LVGL task config: priority 2, core = ARDUINO_RUNNING_CORE(1).
 - **Custom dashboard (dashboard_ui.cpp): 4–5 FPS, low CPU — this is healthy.** LVGL redraws only on change;
