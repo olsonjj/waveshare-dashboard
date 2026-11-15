@@ -82,7 +82,7 @@ static void schedule_next_poll(void)
  * The direct Envoy TLS path works but takes ~29 s per phase from the board
  * (radio airtime the panel can't afford); the relay fetches the Envoy on
  * its fast path and serves us a sub-second LAN GET. */
-static int fetch_solar_relay(uint32_t *watts_now, uint32_t *wh_today)
+static int fetch_solar_relay(uint32_t *watts_now, uint32_t *wh_today, uint32_t *watts_peak)
 {
     uint32_t t0 = millis();
     HTTPClient http;
@@ -112,6 +112,7 @@ static int fetch_solar_relay(uint32_t *watts_now, uint32_t *wh_today)
     }
     *watts_now = doc["watts_now"] | 0u;
     *wh_today   = doc["wh_today"] | 0u;
+    *watts_peak = doc["watts_peak_today"] | 0u;
 
     /* wall clock: the relay's host clock is NTP-synced; SNTP on the board
        wedges the loop ~24-40 s after boot (see NOTES.md 2026-11-15), so sync
@@ -207,16 +208,16 @@ static int fetch_enphase(uint32_t *watts_now, uint32_t *wh_today)
 
 static void push_solar(void)
 {
-    uint32_t watts_now = 0, wh_today = 0;
-    int rc = fetch_solar_relay(&watts_now, &wh_today);
+    uint32_t watts_now = 0, wh_today = 0, watts_peak = 0;
+    int rc = fetch_solar_relay(&watts_now, &wh_today, &watts_peak);
     uint32_t tw = millis();
     /* bounded lock: a wedged LVGL task must never freeze the data layer —
        skip the UI update this cycle instead of waiting forever */
     if (esp_lv_adapter_lock(pdMS_TO_TICKS(5000)) == ESP_OK) {
         if (rc == 0) {
-            dashboard_ui_set_solar(watts_now, wh_today);
+            dashboard_ui_set_solar(watts_now, wh_today, watts_peak);
         } else {
-            dashboard_ui_set_solar(0, 0);   // hold zeros so stale data can't masquerade
+            dashboard_ui_set_solar(0, 0, 0);   // hold zeros so stale data can't masquerade
         }
         esp_lv_adapter_unlock();
         if (millis() - tw > 100) {

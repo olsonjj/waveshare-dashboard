@@ -60,21 +60,27 @@ _cache = {"ok": False, "payload": {}, "ts": 0.0}
 
 def fetch_upstream():
     """One Envoy fetch; returns the compact dict for the board or raises."""
-    url = f"https://{ENVOY_HOST}/ivp/pdm/energy"
-    req = urllib.request.Request(url, headers={
-        "Authorization": f"Bearer {ENVOY_TOKEN}",
-        "Accept": "application/json",
-    })
     ctx = ssl.create_default_context()
     ctx.check_hostname = False            # Envoy serves a self-signed cert
     ctx.verify_mode = ssl.CERT_NONE
-    with urllib.request.urlopen(req, timeout=UPSTREAM_TIMEOUT, context=ctx) as r:
-        doc = json.load(r)
-    pcu = doc["production"]["pcu"]
+    def get(path):
+        req = urllib.request.Request(f"https://{ENVOY_HOST}{path}", headers={
+            "Authorization": f"Bearer {ENVOY_TOKEN}",
+            "Accept": "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=UPSTREAM_TIMEOUT, context=ctx) as r:
+            return json.load(r)
+
+    pcu = get("/ivp/pdm/energy")["production"]["pcu"]
+    # today's system peak = sum of each micro's daily max (they don't peak
+    # simultaneously, but it's the closest the API offers)
+    inverters = get("/api/v1/production/inverters")
+    peak = sum(int(i.get("maxReportWatts", 0)) for i in inverters)
     return {
         "watts_now": int(pcu.get("wattsNow", 0)),
         "wh_today": int(pcu.get("wattHoursToday", 0)),
         "watt_hours_lifetime": int(pcu.get("wattHoursLifetime", 0)),
+        "watts_peak_today": peak,
         "epoch": int(time.time()),   # wall clock for the board (SNTP wedges its loop)
     }
 

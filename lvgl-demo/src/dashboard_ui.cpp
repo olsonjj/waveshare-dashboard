@@ -252,6 +252,7 @@ static lv_obj_t *make_dot(lv_obj_t *parent, int d, lv_color_t fill,
 static lv_obj_t *tab_btn[2];
 static lv_obj_t *tab_underline[2];
 static lv_obj_t *s_power_val_lbl = nullptr;   /* CURRENT POWER card value (kW) */
+static lv_obj_t *s_power_peak_lbl = nullptr;  /* CURRENT POWER card peak row (kW) */
 static lv_obj_t *s_yield_val_lbl = nullptr;   /* TOTAL YIELD card value (kWh) */
 static lv_obj_t *tab_title[2];
 static lv_obj_t *panel_solar, *panel_github;
@@ -471,41 +472,9 @@ static void build_power_card(lv_obj_t *parent)
 
     lv_obj_t *tri = make_tri(card, green(), 10, 8);
     lv_obj_align(tri, LV_ALIGN_BOTTOM_LEFT, 20, -12);
-    lv_obj_t *peak = make_label(card, "Peak 4.85 kW", FONT_BODY, green(), 0, 0);
+    lv_obj_t *peak = make_label(card, "Peak -.- kW", FONT_BODY, green(), 0, 0);
+    s_power_peak_lbl = peak;
     lv_obj_align_to(peak, tri, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
-    lv_obj_t *attime = make_label(card, "@ 13:15", FONT_BODY, text_faint(), 0, 0);
-    lv_obj_align_to(attime, peak, LV_ALIGN_OUT_RIGHT_BOTTOM, 8, 0);
-
-    /* donut gauge (LOAD) */
-    lv_obj_t *arc = lv_arc_create(card);
-    lv_obj_set_size(arc, 96, 96);
-    lv_obj_align(arc, LV_ALIGN_RIGHT_MID, -16, 0);
-    lv_arc_set_bg_angles(arc, 0, 360);
-    lv_arc_set_range(arc, 0, 100);
-    lv_arc_set_value(arc, 76);
-    lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
-    lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_color(arc, color_power(), LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(arc, 9, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(arc, grid(), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(arc, 9, LV_PART_MAIN);
-
-    /* column container holds pct + LOAD; centered as one group so the
-     * pair sits dead-center in the donut hole (aligning pct alone and
-     * hanging LOAD below pushed the whole group low) */
-    lv_obj_t *col = lv_obj_create(arc);
-    lv_obj_set_size(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(col, 0, 0);
-    lv_obj_set_style_pad_all(col, 0, 0);
-    lv_obj_set_style_pad_row(col, 2, 0);
-    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_center(col);
-    make_label(col, "76%", FONT_STAT, color_power(), 0, 0);
-    make_label(col, "LOAD", FONT_SMALL, text_faint(), 0, 0);
 }
 
 static void build_yield_card(lv_obj_t *parent)
@@ -516,31 +485,10 @@ static void build_yield_card(lv_obj_t *parent)
 
     make_label(card, "TOTAL YIELD TODAY", FONT_BODY, text_dim(), 20, 10);
 
-    lv_obj_t *gain = make_pill(card, "+14% vs avg", color_yield(), opa_tint_14,
-                               false, green_tint());
-    lv_obj_align(gain, LV_ALIGN_TOP_RIGHT, -14, 8);
-
     lv_obj_t *val = make_label(card, "21.65", FONT_HERO, text(), 20, 36);
     s_yield_val_lbl = val;
     lv_obj_t *unit = make_label(card, "kWh", FONT_TITLE, color_yield(), 0, 0);
     lv_obj_align_to(unit, val, LV_ALIGN_OUT_RIGHT_BOTTOM, 8, -14);
-
-    lv_obj_t *tgt = make_label(card, "Target: 28.5 kWh", FONT_BODY, text_dim(), 0, 0);
-    lv_obj_align(tgt, LV_ALIGN_RIGHT_MID, -20, -18);
-
-    /* target progress bar: green -> yellow gradient */
-    lv_obj_t *bar = lv_bar_create(card);
-    lv_obj_set_size(bar, 344, 10);
-    lv_obj_align(bar, LV_ALIGN_BOTTOM_LEFT, 20, -14);
-    lv_bar_set_range(bar, 0, 100);
-    lv_bar_set_value(bar, 76, LV_ANIM_OFF);
-    lv_obj_set_style_radius(bar, 5, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(bar, grid(), LV_PART_MAIN);
-    lv_obj_set_style_border_width(bar, 0, 0);
-    lv_obj_set_style_radius(bar, 5, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(bar, color_yield(), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_grad_color(bar, yellow(), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_grad_dir(bar, LV_GRAD_DIR_HOR, LV_PART_INDICATOR);
 }
 
 static void build_chart_card(lv_obj_t *parent)
@@ -764,11 +712,13 @@ void dashboard_ui_set_pr_count(uint32_t count, const char *note)
     (void)note;
 }
 
-void dashboard_ui_set_solar(uint32_t watts_now, uint32_t wh_today)
+void dashboard_ui_set_solar(uint32_t watts_now, uint32_t wh_today, uint32_t watts_peak)
 {
-    char buf[16];
+    char buf[20];
     snprintf(buf, sizeof(buf), "%.2f", watts_now / 1000.0);
     lv_label_set_text(s_power_val_lbl, buf);
     snprintf(buf, sizeof(buf), "%.2f", wh_today / 1000.0);
     lv_label_set_text(s_yield_val_lbl, buf);
+    snprintf(buf, sizeof(buf), "Peak %.2f kW", watts_peak / 1000.0);
+    lv_label_set_text(s_power_peak_lbl, buf);
 }
