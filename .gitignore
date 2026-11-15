@@ -27,3 +27,6 @@ firmware/hostsim/*.raw
 firmware/hostsim/out_tab*.png
 firmware/hostsim/snap_tab*.png
 firmware/hostsim/build/
+
+# Python bytecode
+__pycache__/
