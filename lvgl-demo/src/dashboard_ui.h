@@ -24,4 +24,14 @@ void dashboard_ui_set_pr_count(uint32_t count, const char *note);
 void dashboard_ui_set_solar(uint32_t watts_now, uint32_t wh_today,
                              uint32_t watts_peak, const char *updated);
 
+/** Update the 24-hour generation bar chart: one bar per hour, kWh for
+ *  that hour, index 0 = 12:00 AM. Negative entries render no bar
+ *  (missing hour); pass nullptr or an all-negative array to clear all
+ *  bars and show the default axis grid. Bar heights rescale against a
+ *  dynamic y max derived from the peak entry. Safe to call repeatedly;
+ *  updates existing objects (no allocations beyond label text). Must be
+ *  called with the LVGL adapter lock held (same contract as
+ *  dashboard_ui_set_solar). */
+void dashboard_ui_set_hourly(const float kwh[24]);
+
 #endif // DASHBOARD_UI_H
