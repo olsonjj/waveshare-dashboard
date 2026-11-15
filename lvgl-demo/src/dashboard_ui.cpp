@@ -488,10 +488,21 @@ static void build_power_card(lv_obj_t *parent)
     lv_obj_set_style_arc_color(arc, grid(), LV_PART_MAIN);
     lv_obj_set_style_arc_width(arc, 9, LV_PART_MAIN);
 
-    lv_obj_t *pct = make_label(arc, "76%", FONT_STAT, color_power(), 0, 0);
-    lv_obj_center(pct);
-    lv_obj_t *load = make_label(arc, "LOAD", FONT_SMALL, text_faint(), 0, 0);
-    lv_obj_align_to(load, pct, LV_ALIGN_OUT_BOTTOM_MID, 0, 1);
+    /* column container holds pct + LOAD; centered as one group so the
+     * pair sits dead-center in the donut hole (aligning pct alone and
+     * hanging LOAD below pushed the whole group low) */
+    lv_obj_t *col = lv_obj_create(arc);
+    lv_obj_set_size(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(col, 0, 0);
+    lv_obj_set_style_pad_all(col, 0, 0);
+    lv_obj_set_style_pad_row(col, 2, 0);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_center(col);
+    make_label(col, "76%", FONT_STAT, color_power(), 0, 0);
+    make_label(col, "LOAD", FONT_SMALL, text_faint(), 0, 0);
 }
 
 static void build_yield_card(lv_obj_t *parent)

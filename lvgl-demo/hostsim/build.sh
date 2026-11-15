@@ -28,8 +28,8 @@ done > hostsim/build/manifest.txt
 xargs -P 12 -n 2 hostsim/compile_one.sh < hostsim/build/manifest.txt
 
 echo "compiling C++..."
-clang++ -std=c++17 $CFLAGS $SDL src/dashboard_ui.cpp -o hostsim/build/dashboard_ui.o
-clang++ -std=c++17 $CFLAGS $SDL hostsim/main.cpp -o hostsim/build/main.o
+clang++ -std=c++17 $CFLAGS $SDL -c src/dashboard_ui.cpp -o hostsim/build/dashboard_ui.o
+clang++ -std=c++17 $CFLAGS $SDL -c hostsim/main.cpp -o hostsim/build/main.o
 
 echo "linking..."
 clang++ hostsim/build/*.o -o sim $LDFLAGS
