@@ -144,6 +144,13 @@ rst:0x3 (RTC_SW_SYS_RST) loop + boot errors      — crash loop at bootloader st
 - [ ] Serial monitor: VS Code command `PlatformIO: Monitor` or `pio device monitor --port /dev/cu.usbmodem5B901265491 -f esp32_exception_decoder`.
 - [x] ~~Replace `lv_demo_widgets()` with first custom UI~~ done in v2 (2025-11-14).
 
+## Simulator gotchas
+
+- `hostsim/build.sh` C++ compiles **must keep `-c`** — without it clang++ compiles *and* attempts to
+  link, then fails with undefined `lv_*` symbols (and the object never lands → confusing
+  "_main" link errors later).
+- `sim` binary + `hostsim/*.raw` / out_tab*.png snapshots are build artifacts — gitignored, not tracked.
+
 ## Wall clock (upper-right header)
 
 - Header clock reads the **system time** (`localtime_r`, 1 s tick) with `TZ=PST8PDT,M3.2.0,M11.1.0`
