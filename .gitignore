@@ -19,3 +19,8 @@ Thumbs.db
 # Misc
 *.7z
 *.log
+lvgl-demo/sim
+lvgl-demo/hostsim/*.raw
+lvgl-demo/hostsim/out_tab*.png
+lvgl-demo/hostsim/snap_tab*.png
+lvgl-demo/hostsim/build/
