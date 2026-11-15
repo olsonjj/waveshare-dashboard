@@ -29,6 +29,15 @@ void dashboard_data_fetch_now(void);
 /** Probe TLS connect to host:port (serial "PROBE host[:port]" — diagnostics). */
 void dashboard_data_probe(const char *spec);
 
+/** Solar poll path (see NOTES.md 2026-11-15 "drop the relay" decision):
+ *  0 = DIRECT — board fetches the Envoy over TLS itself. No relay service
+ *      needed. Cost: ~55 s of radio per poll (watch the panel for lines).
+ *      Hourly buckets are built on-board (NVS-persisted).
+ *  1 = RELAY — board polls relay/solar_relay.py (sub-second LAN GET, needs
+ *      the service running; clock syncs from its epoch field).
+ * Keep both compiled: flip the macro to A/B test noise or fall back. */
+#define SOLAR_POLL_VIA_RELAY 0
+
 /** Data polling interval between fetches. IQ microinverters report every
  * ~5 min, so faster polling only re-reads unchanged numbers (and adds radio
  * bursts). */

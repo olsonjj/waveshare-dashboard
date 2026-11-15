@@ -86,9 +86,20 @@ static void seed_time_from_build(void)
     tmbuf.tm_year = year - 1900; tmbuf.tm_mon = mon_idx; tmbuf.tm_mday = day;
     tmbuf.tm_hour = hour; tmbuf.tm_min = minute; tmbuf.tm_sec = sec;
     tmbuf.tm_isdst = -1;                 /* let TZ rules decide PST vs PDT */
-    char stamp[80];
-    snprintf(stamp, sizeof(stamp), "%s %s", __DATE__, __TIME__);
-    apply_time(&tmbuf, stamp);
+
+    /* Seed ONLY if the running RTC is behind the build stamp. Reboots (soft
+     * reset) keep the RTC ticking, so re-seeding unconditionally would
+     * rewind the clock to build time on every reboot — days off by the time
+     * anyone notices. With the relay path the epoch field corrected this
+     * within seconds; in direct mode the RTC is all we have. */
+    time_t build_epoch = mktime(&tmbuf);
+    if (time(nullptr) < build_epoch - 5) {
+        char stamp[80];
+        snprintf(stamp, sizeof(stamp), "%s %s", __DATE__, __TIME__);
+        apply_time(&tmbuf, stamp);
+    } else {
+        Serial.println("[time] RTC ahead of build stamp - kept");
+    }
 }
 
 static void handle_serial_line(const String &line)

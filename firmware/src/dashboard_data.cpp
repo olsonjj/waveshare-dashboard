@@ -82,6 +82,7 @@ static void schedule_next_poll(void)
  * The direct Envoy TLS path works but takes ~29 s per phase from the board
  * (radio airtime the panel can't afford); the relay fetches the Envoy on
  * its fast path and serves us a sub-second LAN GET. */
+#if SOLAR_POLL_VIA_RELAY
 static int fetch_solar_relay(uint32_t *watts_now, uint32_t *wh_today,
                               uint32_t *watts_peak, float hourly_kwh[24])
 {
@@ -141,16 +142,20 @@ static int fetch_solar_relay(uint32_t *watts_now, uint32_t *wh_today,
                   (unsigned long)(millis() - t0), (double)(doc["age_s"] | 0.0));
     return 0;
 }
+#endif /* SOLAR_POLL_VIA_RELAY */
 
-/* Enphase IQ Gateway direct fetch — kept as fallback/diagnostic path.
- * Enphase IQ Gateway (local LAN): GET /ivp/pdm/energy -> production.pcu.
+/* Enphase IQ Gateway direct fetch — the scheduled poll path in direct mode.
+ * Enphase IQ Gateway (local LAN): GET /ivp/pdm/energy -> production.pcu,
+ * then /api/v1/production/inverters on the same TLS session for the peak
+ * (sum of per-micro maxReportWatts).
  * Gateway serves TLS with a SELF-SIGNED cert (verified device on our own
  * LAN) so verification is intentionally disabled here. */
 /* kept across polls: the Envoy handshake is slow (~21 s) but keep-alive
  * works, so reuse the session and only re-handshake when it drops */
 static NetworkClientSecure s_envoy_tls;
 
-static int fetch_enphase(uint32_t *watts_now, uint32_t *wh_today)
+static int fetch_enphase(uint32_t *watts_now, uint32_t *wh_today,
+                         uint32_t *watts_peak)
 {
     uint32_t t0 = millis();
     if (!s_envoy_tls.connected()) {
@@ -210,26 +215,142 @@ static int fetch_enphase(uint32_t *watts_now, uint32_t *wh_today)
     }
     *watts_now = doc["production"]["pcu"]["wattsNow"] | 0u;
     *wh_today   = doc["production"]["pcu"]["wattHoursToday"] | 0u;
-    Serial.printf("[data] envoy: %lu W, %lu Wh today (get %lu ms, body %lu ms, %u B)\n",
+    uint32_t t_peak = millis();
+
+    /* second endpoint on the same TLS session: per-micro daily maxes ->
+     * today's system peak (they don't peak simultaneously, but it's the
+     * closest the local API offers). Failure here only costs the peak. */
+    snprintf(url, sizeof(url), "https://%s/api/v1/production/inverters", ENVOY_HOST);
+    if (!http.begin(s_envoy_tls, url)) {
+        Serial.println("[data] inverters endpoint begin FAIL");
+    } else {
+        http.addHeader("Authorization", "Bearer " ENVOY_TOKEN);
+        http.addHeader("Accept", "application/json");
+        int code2 = http.GET();
+        if (code2 != 200) {
+            Serial.printf("[data] inverters HTTP error %d - peak stays 0\n", code2);
+            http.end();
+            s_envoy_tls.stop();            /* session may be dead; rebuild next poll */
+        } else {
+            String inv = http.getString();
+            http.end();
+            JsonDocument idoc;
+            DeserializationError ierr = deserializeJson(idoc, inv);
+            if (ierr) {
+                Serial.printf("[data] inverters JSON parse failed: %s\n", ierr.c_str());
+            } else {
+                for (JsonVariantConst v : idoc.as<JsonArray>()) {
+                    *watts_peak += v["maxReportWatts"] | 0u;
+                }
+            }
+        }
+    }
+
+    Serial.printf("[data] envoy: %lu W, %lu Wh today, %lu W peak (get %lu ms, body %lu ms, inverters %lu ms, %u B)\n",
                   (unsigned long)*watts_now, (unsigned long)*wh_today,
+                  (unsigned long)*watts_peak,
                   (unsigned long)(t_hdr - t0), (unsigned long)(t_body - t_hdr),
-                  (unsigned)payload.length());
+                  (unsigned long)(millis() - t_peak), (unsigned)payload.length());
     return 0;
 }
+
+#if !SOLAR_POLL_VIA_RELAY
+/* ----- on-board hourly buckets (direct mode) ------------------------------
+ * Same scheme the relay built: bucket h = wh_today(end) - wh_today(hour
+ * start); the current hour is a live partial; -1 = no data this hour.
+ * The 5-min poll cadence is plenty of resolution for hour buckets. State
+ * lives in NVS so reboots mid-day don't lose the chart. NOTE: bucket
+ * indices trust the board RTC (build-stamp seeded; see main.cpp). */
+#include <Preferences.h>
+
+static Preferences s_hist;
+static char     s_hist_date[11] = "";    /* local "YYYY-MM-DD"          */
+static float    s_hist_kwh[24];
+static int32_t  s_hist_wh_start[24];
+static int32_t  s_hist_last_wh = -1;
+static int      s_hist_last_hour = -1;
+
+static void hist_load(void)
+{
+    s_hist.begin("solarhist", false);
+    String saved = s_hist.getString("date", "");
+    size_t n = s_hist.getBytes("kwh", s_hist_kwh, sizeof(s_hist_kwh));
+    s_hist.getBytes("whstart", s_hist_wh_start, sizeof(s_hist_wh_start));
+    s_hist_last_wh   = s_hist.getInt("lastwh", -1);
+    s_hist_last_hour = s_hist.getInt("lasthour", -1);
+    if (n == sizeof(s_hist_kwh) && saved.length() == 10) {
+        strncpy(s_hist_date, saved.c_str(), sizeof(s_hist_date) - 1);
+        Serial.printf("[data] hourly history loaded: %s (%d buckets set)\n",
+                      s_hist_date,
+                      s_hist_last_hour >= 0 ? s_hist_last_hour + 1 : 0);
+    } else {
+        Serial.println("[data] hourly history: none stored");
+    }
+}
+
+/* fold one wh_today sample into the buckets + persist (port of the
+ * relay's _apply_sample: hour-boundary close, midnight reset, live partial) */
+static void hist_apply(uint32_t wh)
+{
+    time_t now = time(nullptr);
+    struct tm tmv;
+    localtime_r(&now, &tmv);
+    char today[11];
+    strftime(today, sizeof(today), "%Y-%m-%d", &tmv);
+
+    if (strcmp(today, s_hist_date) != 0) {           /* midnight rollover */
+        strcpy(s_hist_date, today);
+        for (int i = 0; i < 24; i++) { s_hist_kwh[i] = -1.0f; s_hist_wh_start[i] = -1; }
+        s_hist_last_wh = -1;
+        s_hist_last_hour = -1;
+        Serial.printf("[data] hourly: new day %s\n", today);
+    }
+    int hour = tmv.tm_hour;
+    if (hour != s_hist_last_hour) {                  /* close previous hour */
+        if (s_hist_last_hour >= 0 && s_hist_wh_start[s_hist_last_hour] >= 0
+            && s_hist_last_wh >= 0) {
+            s_hist_kwh[s_hist_last_hour] =
+                (s_hist_last_wh - s_hist_wh_start[s_hist_last_hour]) / 1000.0f;
+            Serial.printf("[data] hourly: closed hour %d at %.2f kWh\n",
+                          s_hist_last_hour,
+                          (double)s_hist_kwh[s_hist_last_hour]);
+        }
+        s_hist_wh_start[hour] = (int32_t)wh;
+        s_hist_last_hour = hour;
+    }
+    if (s_hist_wh_start[hour] >= 0)                 /* live partial */
+        s_hist_kwh[hour] = ((int32_t)wh - s_hist_wh_start[hour]) / 1000.0f;
+    s_hist_last_wh = (int32_t)wh;
+
+    s_hist.putString("date", s_hist_date);
+    s_hist.putBytes("kwh", s_hist_kwh, sizeof(s_hist_kwh));
+    s_hist.putBytes("whstart", s_hist_wh_start, sizeof(s_hist_wh_start));
+    s_hist.putInt("lastwh", s_hist_last_wh);
+    s_hist.putInt("lasthour", s_hist_last_hour);
+}
+#endif /* !SOLAR_POLL_VIA_RELAY */
 
 static void push_solar(void)
 {
     uint32_t watts_now = 0, wh_today = 0, watts_peak = 0;
     float hourly[24];
     for (int i = 0; i < 24; i++) hourly[i] = -1.0f;   /* -1 = hour missing */
+#if SOLAR_POLL_VIA_RELAY
     int rc = fetch_solar_relay(&watts_now, &wh_today, &watts_peak, hourly);
+#else
+    int rc = fetch_enphase(&watts_now, &wh_today, &watts_peak);
+    if (rc == 0) {
+        hist_apply(wh_today);
+        memcpy(hourly, s_hist_kwh, sizeof(hourly));
+    }
+#endif
     uint32_t tw = millis();
     /* bounded lock: a wedged LVGL task must never freeze the data layer —
        skip the UI update this cycle instead of waiting forever */
     if (esp_lv_adapter_lock(pdMS_TO_TICKS(5000)) == ESP_OK) {
         if (rc == 0) {
-            /* fetch_solar_relay() applied the relay's epoch before we get here,
-             * so the local wall clock is already correct for the stamp. */
+            /* The wall clock is local (RTC seeded per main.cpp policy; the
+             * relay path would have applied its epoch already). */
             char upd[16] = "--:--";
             time_t t = time(nullptr);
             struct tm tmv;
@@ -538,8 +659,12 @@ void dashboard_data_init(void)
     /* SNTP CONFIRMED as the once-per-boot loop wedge: its first DNS+query
        burst after connect froze loop() 24-40 s (every build with SNTP;
        clean in every build without — 2026-11-15 session, NOTES.md).
-       The wall clock now syncs from the relay's epoch field instead
-       (see fetch_solar_relay); the serial TIME command stays as fallback. */
+       The wall clock now runs from the build-stamp-seeded RTC (direct mode)
+       or the relay's epoch field (relay mode); serial TIME stays as the
+       manual fallback. */
+#if !SOLAR_POLL_VIA_RELAY
+    hist_load();
+#endif
 
     printf("[data] connecting to WiFi network \"%s\"...\n", WIFI_SSID);
     radio_up_and_connect();

@@ -325,3 +325,24 @@ moved to `docs/NOTES.md`, README rewritten to describe the actual system
 state, now gitignored). Board banner now prints "solar dashboard start/ready".
 Historical entries above still say `lvgl-demo/` — that's the path at the time;
 the hostsim scripts are path-relative and unaffected.
+
+### Direct mode: drop the relay dependency (2026-11-15, evaluation in progress)
+
+User decision: the dashboard should not depend on a second always-on service;
+if one ever returns, it will be a push (MQTT) design, not the poll relay.
+
+Firmware now has both poll paths compiled behind SOLAR_POLL_VIA_RELAY
+(dashboard_data.h, currently 0 = DIRECT):
+- DIRECT: board fetches the Envoy itself (TLS, keep-alive session kept across
+  polls); second GET on the same session pulls the inverters endpoint for the
+  daily peak. Hourly buckets are built ON-BOARD from the 5-min poll samples
+  and persisted in NVS (Preferences, namespace "solarhist") - reboots mid-day
+  keep the chart. Wall clock: RTC seeded from build stamp ONLY when behind it
+  (main.cpp) so reboots don't rewind time; serial TIME still corrects.
+- RELAY: previous behavior intact behind the macro (relay/solar_relay.py
+  stays in the repo as the seed of any future push service).
+
+First direct fetch: handshake 8.7 s + GET 17.3 s + inverters 0.35 s = ~26 s
+radio window per 5-min poll (better than the 21-29 s/phase measured earlier;
+variance unexplained). Panel-noise evaluation at stock PCLK ongoing; next
+levers ready: PCLK 16->13, bounce x20, then TLS-slowdown root-cause.
