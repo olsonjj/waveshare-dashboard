@@ -12,6 +12,9 @@ pio-build/
 secrets.h
 **/secrets.h
 
+# Relay runtime state (hourly solar history — data, not code)
+relay/solar_history.json
+
 # OS cruft
 .DS_Store
 Thumbs.db
@@ -19,3 +22,14 @@ Thumbs.db
 # Misc
 *.7z
 *.log
+firmware/sim
+firmware/hostsim/*.raw
+firmware/hostsim/out_tab*.png
+firmware/hostsim/snap_tab*.png
+firmware/hostsim/build/
+
+# Python bytecode
+__pycache__/
+
+# generated build stamp (pre_build_stamp.py)
+firmware/include/build_stamp.h
