@@ -126,7 +126,7 @@ void setup()
      128-byte HW FIFO (see NOTES.md serial hardening rationale) */
     Serial.setTxBufferSize(4096);
     Serial.begin(921600);
-    Serial.println("LVGL v8 demo start");
+    Serial.println("solar dashboard start");
 
     /* TZ must be set before any localtime()/mktime() use */
     setenv("TZ", TZ_PACIFIC, 1);
@@ -196,7 +196,7 @@ void setup()
     dashboard_ui_init();
     esp_lv_adapter_unlock();
 
-    Serial.println("LVGL v8 demo ready");
+    Serial.println("solar dashboard ready");
     Serial.flush();
 }
 

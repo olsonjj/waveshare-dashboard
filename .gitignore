@@ -12,6 +12,9 @@ pio-build/
 secrets.h
 **/secrets.h
 
+# Relay runtime state (hourly solar history — data, not code)
+relay/solar_history.json
+
 # OS cruft
 .DS_Store
 Thumbs.db
@@ -19,8 +22,8 @@ Thumbs.db
 # Misc
 *.7z
 *.log
-lvgl-demo/sim
-lvgl-demo/hostsim/*.raw
-lvgl-demo/hostsim/out_tab*.png
-lvgl-demo/hostsim/snap_tab*.png
-lvgl-demo/hostsim/build/
+firmware/sim
+firmware/hostsim/*.raw
+firmware/hostsim/out_tab*.png
+firmware/hostsim/snap_tab*.png
+firmware/hostsim/build/

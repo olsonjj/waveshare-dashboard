@@ -316,3 +316,12 @@ Goal: real WiFi creds in secrets.h → Enphase solar data on the Solar tab.
 * **Relay adopted as the scheduled poll path**: board → `relay/solar_relay.py` (Mac, `http://<mac>:8420/solar`, `X-Relay-Key`) → Envoy. Fetch ~1.7 s every 60 s (~3% radio duty). Direct Envoy TLS fetcher kept in firmware as fallback/diagnostic (unscheduled).
 * First relay-era boots: no noise reported during the short polls (panel-quiet confirmation pending user check at wrap-up).
 * Uncommitted-work risk noted: commit after this wrap-up.
+
+### Project cleanup (2026-11-15)
+
+`lvgl-demo/` renamed to `firmware/` (the directory outgrew its name), `NOTES.md`
+moved to `docs/NOTES.md`, README rewritten to describe the actual system
+(board + relay architecture). `relay/solar_history.json` untracked (runtime
+state, now gitignored). Board banner now prints "solar dashboard start/ready".
+Historical entries above still say `lvgl-demo/` — that's the path at the time;
+the hostsim scripts are path-relative and unaffected.

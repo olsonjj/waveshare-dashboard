@@ -3,7 +3,7 @@
 #   ./hostsim/build.sh            -> builds ./hostsim/sim
 #   ./hostsim/build.sh snap       -> builds, runs, converts raw -> PNG
 set -e
-cd "$(dirname "$0")/.."   # lvgl-demo/
+cd "$(dirname "$0")/.."   # firmware/
 
 CFLAGS="-O1 -DLV_CONF_INCLUDE_SIMPLE -Ihostsim -Ilib -Ilib/lvgl -Isrc -Wno-unused-function"
 LDFLAGS="-L/opt/homebrew/lib -lSDL2 -lm"
