@@ -215,9 +215,16 @@ static void push_solar(void)
        skip the UI update this cycle instead of waiting forever */
     if (esp_lv_adapter_lock(pdMS_TO_TICKS(5000)) == ESP_OK) {
         if (rc == 0) {
-            dashboard_ui_set_solar(watts_now, wh_today, watts_peak);
+            /* fetch_solar_relay() applied the relay's epoch before we get here,
+             * so the local wall clock is already correct for the stamp. */
+            char upd[16] = "--:--";
+            time_t t = time(nullptr);
+            struct tm tmv;
+            localtime_r(&t, &tmv);
+            strftime(upd, sizeof(upd), "%I:%M %p", &tmv);
+            dashboard_ui_set_solar(watts_now, wh_today, watts_peak, upd);
         } else {
-            dashboard_ui_set_solar(0, 0, 0);   // hold zeros so stale data can't masquerade
+            dashboard_ui_set_solar(0, 0, 0, "--:--");   // zeros: stale data can't masquerade
         }
         esp_lv_adapter_unlock();
         if (millis() - tw > 100) {

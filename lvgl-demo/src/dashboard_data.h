@@ -29,8 +29,10 @@ void dashboard_data_fetch_now(void);
 /** Probe TLS connect to host:port (serial "PROBE host[:port]" — diagnostics). */
 void dashboard_data_probe(const char *spec);
 
-/** Data polling interval between successful fetches. */
-#define DATA_POLL_INTERVAL_MS (60UL * 1000UL)
+/** Data polling interval between fetches. IQ microinverters report every
+ * ~5 min, so faster polling only re-reads unchanged numbers (and adds radio
+ * bursts). */
+#define DATA_POLL_INTERVAL_MS (5UL * 60UL * 1000UL)
 
 /** Timeouts */
 #define WIFI_CONNECT_TIMEOUT_MS  (10UL * 1000UL)

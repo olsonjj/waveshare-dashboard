@@ -253,7 +253,13 @@ static lv_obj_t *tab_btn[2];
 static lv_obj_t *tab_underline[2];
 static lv_obj_t *s_power_val_lbl = nullptr;   /* CURRENT POWER card value (kW) */
 static lv_obj_t *s_power_peak_lbl = nullptr;  /* CURRENT POWER card peak row (kW) */
+static lv_obj_t *s_power_unit_lbl = nullptr;  /* kW unit; re-aligned each update */
 static lv_obj_t *s_yield_val_lbl = nullptr;   /* TOTAL YIELD card value (kWh) */
+static lv_obj_t *s_yield_unit_lbl = nullptr;  /* kWh unit; re-aligned each update */
+static lv_obj_t *s_power_upd_lbl = nullptr;  /* last-updated pill label */
+
+/* GitHub tab is design-only for now — hidden until it gets real data. */
+#define GITHUB_TAB_ENABLED 0
 static lv_obj_t *tab_title[2];
 static lv_obj_t *panel_solar, *panel_github;
 static lv_obj_t *clock_label;
@@ -283,7 +289,7 @@ static int kw_to_py(double kw)
 static void select_tab(int idx)
 {
     sel_tab = idx;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < (GITHUB_TAB_ENABLED ? 2 : 1); i++) {
         bool on = (i == sel_tab);
         lv_obj_set_style_bg_opa(tab_btn[i], on ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
         lv_obj_set_style_text_color(tab_title[i],
@@ -292,10 +298,16 @@ static void select_tab(int idx)
         if (on) lv_obj_clear_flag(tab_underline[i], LV_OBJ_FLAG_HIDDEN);
         else    lv_obj_add_flag(tab_underline[i], LV_OBJ_FLAG_HIDDEN);
     }
+#if GITHUB_TAB_ENABLED
     if (sel_tab == 0) { lv_obj_clear_flag(panel_solar, LV_OBJ_FLAG_HIDDEN);
                         lv_obj_add_flag(panel_github, LV_OBJ_FLAG_HIDDEN); }
     else              { lv_obj_clear_flag(panel_github, LV_OBJ_FLAG_HIDDEN);
                         lv_obj_add_flag(panel_solar, LV_OBJ_FLAG_HIDDEN); }
+#else
+    /* single-tab build: solar panel is the only content; panel_github was
+     * never created, so select_tab() must not touch it */
+    lv_obj_clear_flag(panel_solar, LV_OBJ_FLAG_HIDDEN);
+#endif
 }
 
 static void tab_click_cb(lv_event_t *e)
@@ -346,7 +358,8 @@ static void build_header(lv_obj_t *scr)
 
     lv_obj_add_event_cb(b0, tab_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)0);
 
-    /* --- tab 1: GITHUB OPS --- */
+    /* --- tab 1: GITHUB OPS (hidden until built) --- */
+#if GITHUB_TAB_ENABLED
     lv_obj_t *b1 = lv_btn_create(header);
     tab_btn[1] = b1;
     lv_obj_set_size(b1, 234, 44);
@@ -373,6 +386,7 @@ static void build_header(lv_obj_t *scr)
     lv_obj_align(repos, LV_ALIGN_RIGHT_MID, -10, 0);
 
     lv_obj_add_event_cb(b1, tab_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)1);
+#endif /* GITHUB_TAB_ENABLED */
 
     /* --- underlines (header children; hidden unless active) --- */
     lv_obj_t *ul0 = lv_obj_create(header);
@@ -385,6 +399,7 @@ static void build_header(lv_obj_t *scr)
     lv_obj_clear_flag(ul0, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     tab_underline[0] = ul0;
 
+#if GITHUB_TAB_ENABLED
     lv_obj_t *ul1 = lv_obj_create(header);
     lv_obj_set_size(ul1, 234, 3);
     lv_obj_set_pos(ul1, 278, 49);
@@ -395,22 +410,9 @@ static void build_header(lv_obj_t *scr)
     lv_obj_clear_flag(ul1, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(ul1, LV_OBJ_FLAG_HIDDEN);
     tab_underline[1] = ul1;
+#endif /* GITHUB_TAB_ENABLED */
 
-    /* --- right cluster: sync chip, signal bars, clock --- */
-    lv_obj_t *sync = lv_obj_create(header);
-    lv_obj_set_size(sync, 104, 32);
-    lv_obj_align(sync, LV_ALIGN_RIGHT_MID, -169, 0);
-    lv_obj_set_style_pad_all(sync, 0, 0);
-    lv_obj_set_style_bg_color(sync, background(), 0);
-    lv_obj_set_style_bg_opa(sync, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(sync, radius_ctrl, 0);
-    lv_obj_set_style_border_color(sync, border(), 0);
-    lv_obj_set_style_border_width(sync, 1, 0);
-    lv_obj_clear_flag(sync, LV_OBJ_FLAG_SCROLLABLE);
-    make_dot(sync, 7, cyan(), cyan(), 12, 13);
-    lv_obj_t *slt = make_label(sync, "Sync: 1s", FONT_BODY, text_dim(), 0, 0);
-    lv_obj_align(slt, LV_ALIGN_RIGHT_MID, -10, 0);
-
+    /* --- right cluster: signal bars, clock --- */
     static const uint8_t bar_h[3] = {6, 10, 14};
     for (int i = 0; i < 3; i++) {
         lv_obj_t *bar = lv_obj_create(header);
@@ -461,14 +463,16 @@ static void build_power_card(lv_obj_t *parent)
 
     lv_obj_t *title_lbl = make_label(card, "CURRENT POWER", FONT_BODY, text_dim(), 20, 10);
 
-    lv_obj_t *pill = make_pill(card, "REALTIME", solar_amber(), opa_tint_14,
+    lv_obj_t *pill = make_pill(card, "Last updated: --:--", solar_amber(), opa_tint_14,
                                false, amber_tint());
     lv_obj_align_to(pill, title_lbl, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
+    s_power_upd_lbl = lv_obj_get_child(pill, 0);   /* the pill's label */
 
     lv_obj_t *val = make_label(card, "3.84", FONT_HERO, color_power(), 20, 36);
     s_power_val_lbl = val;
     lv_obj_t *unit = make_label(card, "kW", FONT_TITLE, text_dim(), 0, 0);
-    lv_obj_align_to(unit, val, LV_ALIGN_OUT_RIGHT_BOTTOM, 8, -14);
+    lv_obj_align_to(unit, val, LV_ALIGN_OUT_RIGHT_BOTTOM, 12, -14);
+    s_power_unit_lbl = unit;
 
     lv_obj_t *tri = make_tri(card, green(), 10, 8);
     lv_obj_align(tri, LV_ALIGN_BOTTOM_LEFT, 20, -12);
@@ -488,7 +492,8 @@ static void build_yield_card(lv_obj_t *parent)
     lv_obj_t *val = make_label(card, "21.65", FONT_HERO, text(), 20, 36);
     s_yield_val_lbl = val;
     lv_obj_t *unit = make_label(card, "kWh", FONT_TITLE, color_yield(), 0, 0);
-    lv_obj_align_to(unit, val, LV_ALIGN_OUT_RIGHT_BOTTOM, 8, -14);
+    lv_obj_align_to(unit, val, LV_ALIGN_OUT_RIGHT_BOTTOM, 12, -14);
+    s_yield_unit_lbl = unit;
 }
 
 static void build_chart_card(lv_obj_t *parent)
@@ -680,6 +685,7 @@ void dashboard_ui_init(void)
     lv_obj_set_style_pad_all(panel_solar, 0, 0);
     lv_obj_clear_flag(panel_solar, LV_OBJ_FLAG_SCROLLABLE);
 
+#if GITHUB_TAB_ENABLED
     panel_github = lv_obj_create(scr);
     lv_obj_set_size(panel_github, 800, 428);
     lv_obj_set_pos(panel_github, 0, 52);
@@ -688,6 +694,7 @@ void dashboard_ui_init(void)
     lv_obj_set_style_pad_all(panel_github, 0, 0);
     lv_obj_clear_flag(panel_github, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(panel_github, LV_OBJ_FLAG_HIDDEN);
+#endif
 
     build_power_card(panel_solar);
     build_yield_card(panel_solar);
@@ -702,7 +709,7 @@ void dashboard_ui_init(void)
 /* switch tabs programmatically (used by the host simulator; harmless on HW) */
 void dashboard_ui_select_tab(int idx)
 {
-    if (idx == 0 || idx == 1) select_tab(idx);
+    if (idx == 0 || (GITHUB_TAB_ENABLED && idx == 1)) select_tab(idx);
 }
 
 /* data layer hook — the GitHub tab is empty, so keep the value console-side */
@@ -712,7 +719,8 @@ void dashboard_ui_set_pr_count(uint32_t count, const char *note)
     (void)note;
 }
 
-void dashboard_ui_set_solar(uint32_t watts_now, uint32_t wh_today, uint32_t watts_peak)
+void dashboard_ui_set_solar(uint32_t watts_now, uint32_t wh_today,
+                             uint32_t watts_peak, const char *updated)
 {
     char buf[20];
     snprintf(buf, sizeof(buf), "%.2f", watts_now / 1000.0);
@@ -721,4 +729,15 @@ void dashboard_ui_set_solar(uint32_t watts_now, uint32_t wh_today, uint32_t watt
     lv_label_set_text(s_yield_val_lbl, buf);
     snprintf(buf, sizeof(buf), "Peak %.2f kW", watts_peak / 1000.0);
     lv_label_set_text(s_power_peak_lbl, buf);
+    char upd[40];
+    snprintf(upd, sizeof(upd), "Last updated: %s", updated ? updated : "--:--");
+    lv_label_set_text(s_power_upd_lbl, upd);
+
+    /* lv_obj_align_to positions are one-shot: the value labels resize when
+     * their text changes, so re-run the unit alignment every update or the
+     * unit drifts into the digits (seen with kWh at "10.00"). */
+    lv_obj_align_to(s_power_unit_lbl, s_power_val_lbl,
+                    LV_ALIGN_OUT_RIGHT_BOTTOM, 12, -14);
+    lv_obj_align_to(s_yield_unit_lbl, s_yield_val_lbl,
+                    LV_ALIGN_OUT_RIGHT_BOTTOM, 12, -14);
 }
