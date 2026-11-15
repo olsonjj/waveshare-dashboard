@@ -300,6 +300,20 @@ struct __attribute__((packed)) HistSnap {
                                            * not all dumped into the recovery hour */
 };
 
+/* ver-1 blob (written by the previous firmware revision): same layout as
+ * HistSnap WITHOUT the trailing int64_t last_ts field. Defined separately
+ * (not reinterpreted as a HistSnap) so the field copy is explicit. */
+struct __attribute__((packed)) HistSnapV1 {
+    uint8_t  ver;
+    char     date[11];
+    float    kwh[24];
+    int32_t  wh_start[24];
+    int32_t  last_wh;
+    int32_t  last_hour;
+};
+static_assert(sizeof(HistSnapV1) == sizeof(HistSnap) - sizeof(int64_t),
+              "v1 snapshot must be HistSnap without last_ts");
+
 /* one-time migration from the pre-blob firmware's five separate legacy keys
  * ("date" String, "kwh" bytes, "whstart" bytes, "lastwh", "lasthour"):
  * only tried when the "snap" blob is absent or invalid, so a valid v2
@@ -326,7 +340,14 @@ static void hist_migrate_legacy(void)
     snap.last_ts   = 0;
     strlcpy(snap.date, date.c_str(), sizeof(snap.date));
 
-    s_hist.putBytes("snap", &snap, sizeof(snap));
+    /* the legacy keys are the only copy of this data — do not delete them
+     * unless the snap blob is confirmed written (NVS may be full) */
+    size_t written = s_hist.putBytes("snap", &snap, sizeof(snap));
+    if (written != sizeof(snap)) {
+        Serial.printf("[data] hourly history: snapshot save FAILED (%u/%u B) - legacy keys kept\n",
+                      (unsigned)written, (unsigned)sizeof(snap));
+        return;                            /* fresh start in memory; retry next boot */
+    }
 
     /* adopt locally exactly like a loaded snapshot */
     memcpy(s_hist_kwh, snap.kwh, sizeof(s_hist_kwh));
@@ -350,8 +371,36 @@ static void hist_load(void)
     s_hist.begin("solarhist", false);
     HistSnap snap;
     size_t n = s_hist.getBytesLength("snap");
+    bool have_snap = false;
+
     if (n == sizeof(snap) && s_hist.getBytes("snap", &snap, sizeof(snap)) == sizeof(snap)
         && snap.ver == HIST_SNAP_VER) {
+        have_snap = true;                  /* adopt below */
+    } else if (n == sizeof(HistSnapV1)) {
+        /* old ver-1 blob (same layout without last_ts): convert in place so
+         * a firmware upgrade does not discard the saved bars. Runs BEFORE
+         * the five-key migration — a v1 snap and legacy five-key data are
+         * never both present in practice. */
+        HistSnapV1 v1;
+        if (s_hist.getBytes("snap", &v1, sizeof(v1)) == sizeof(v1) && v1.ver == 1u) {
+            HistSnap up;
+            memset(&up, 0, sizeof(up));
+            up.ver = HIST_SNAP_VER;
+            memcpy(up.date,     v1.date,     sizeof(up.date));
+            memcpy(up.kwh,      v1.kwh,      sizeof(up.kwh));
+            memcpy(up.wh_start, v1.wh_start, sizeof(up.wh_start));
+            up.last_wh   = v1.last_wh;
+            up.last_hour = v1.last_hour;
+            up.last_ts   = 0;              /* unknown: carry gate stays closed
+                                            * until the first accepted sample */
+            s_hist.putBytes("snap", &up, sizeof(up));
+            snap = up;
+            have_snap = true;
+            Serial.println("[data] hourly history: upgraded v1 snapshot");
+        }
+    }
+
+    if (have_snap) {
         memcpy(s_hist_kwh, snap.kwh, sizeof(s_hist_kwh));
         memcpy(s_hist_wh_start, snap.wh_start, sizeof(s_hist_wh_start));
         s_hist_last_wh   = snap.last_wh;
@@ -362,18 +411,19 @@ static void hist_load(void)
         Serial.printf("[data] hourly history loaded: %s (%d buckets set)\n",
                       s_hist_date,
                       s_hist_last_hour >= 0 ? s_hist_last_hour + 1 : 0);
-    } else {
-        /* wrong size (old ver-1 blob) or unknown version: try the five-key
-         * legacy migration, else start fresh */
-        for (int i = 0; i < 24; i++) { s_hist_kwh[i] = -1.0f; s_hist_wh_start[i] = -1; }
-        s_hist_date[0] = '\0';
-        s_hist_last_wh = -1;
-        s_hist_last_hour = -1;
-        s_hist_last_ts = 0;
-        hist_migrate_legacy();
-        if (s_hist_date[0] == '\0')
-            Serial.println("[data] hourly history: none stored");
+        return;
     }
+
+    /* wrong size / unknown version / no snap at all: the five-key legacy
+     * migration is the LAST resort, else start fresh */
+    for (int i = 0; i < 24; i++) { s_hist_kwh[i] = -1.0f; s_hist_wh_start[i] = -1; }
+    s_hist_date[0] = '\0';
+    s_hist_last_wh = -1;
+    s_hist_last_hour = -1;
+    s_hist_last_ts = 0;
+    hist_migrate_legacy();
+    if (s_hist_date[0] == '\0')
+        Serial.println("[data] hourly history: none stored");
 }
 
 /* fold one wh_today sample into the buckets + persist (port of the
