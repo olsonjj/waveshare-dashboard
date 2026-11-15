@@ -266,225 +266,50 @@ static int fetch_enphase(uint32_t *watts_now, uint32_t *wh_today,
 
 #if !SOLAR_POLL_VIA_RELAY
 /* ----- on-board hourly buckets (direct mode) ------------------------------
- * Same scheme the relay built: bucket h = wh_today(end) - wh_today(hour
- * start); the current hour is a live partial; -1 = no data this hour.
- * The 5-min poll cadence is plenty of resolution for hour buckets. State
- * lives in NVS so reboots mid-day don't lose the chart. NOTE: bucket
- * indices trust the board RTC (build-stamp seeded; see main.cpp). */
+ * Bucket logic lives in solar_hist.cpp (pure, host-testable); this stub
+ * wires it to the board: Preferences (NVS), localtime_r, Serial. NOTE:
+ * bucket indices trust the board RTC (build-stamp seeded; see main.cpp). */
 #include <Preferences.h>
+#include "solar_hist.h"
 
 static Preferences s_hist;
-static char     s_hist_date[11] = "";    /* local "YYYY-MM-DD"          */
-static float    s_hist_kwh[24];
-static int32_t  s_hist_wh_start[24];
-static int32_t  s_hist_last_wh = -1;
-static int      s_hist_last_hour = -1;
-static int64_t  s_hist_last_ts = 0;       /* epoch of last accepted sample; 0 = unknown */
 
-/* The whole snapshot is stored as ONE versioned blob: a power failure or
- * reset between five separate Preferences commits used to pair a new date
- * with yesterday's buckets (midnight rollover then never fired).
- * Packed so the NVS byte size is compiler-independent. */
-#define HIST_SNAP_VER 2u
-#define HIST_CARRY_FRESH_S 900                    /* 3 poll intervals of 5 min */
-struct __attribute__((packed)) HistSnap {
-    uint8_t  ver;
-    char     date[11];                     /* "YYYY-MM-DD" + NUL          */
-    float    kwh[24];
-    int32_t  wh_start[24];
-    int32_t  last_wh;
-    int32_t  last_hour;
-    int64_t  last_ts;                     /* epoch of last sample; 0 = unknown.
-                                           * v2: gates the hour-boundary carry so
-                                           * energy from a skipped poll outage is
-                                           * not all dumped into the recovery hour */
+/* Storage adapter: SolarHistStore over the Preferences "solarhist"
+ * namespace (NVS). Thin pass-throughs; getString copies the legacy 10-char
+ * "date" String out and returns its strlen (0 if missing). */
+class NvsHistStore : public SolarHistStore {
+public:
+    bool begin() override                  { return s_hist.begin("solarhist", false); }
+    size_t bytesLen(const char* key) override
+                                           { return s_hist.getBytesLength(key); }
+    size_t getBytes(const char* key, void* buf, size_t len) override
+                                           { return s_hist.getBytes(key, buf, len); }
+    size_t putBytes(const char* key, const void* buf, size_t len) override
+                                           { return s_hist.putBytes(key, buf, len); }
+    size_t getString(const char* key, char* buf, size_t len) override {
+        String v = s_hist.getString(key, String());
+        size_t srclen = v.length();
+        if (srclen == 0 || len == 0)
+            return 0;
+        size_t n = (srclen < len - 1) ? srclen : len - 1;
+        memcpy(buf, v.c_str(), n);
+        buf[n] = '\0';
+        return n;                          /* strlen of copied value */
+    }
+    int32_t getInt(const char* key, int32_t def) override
+                                           { return s_hist.getInt(key, def); }
+    void remove(const char* key) override  { s_hist.remove(key); }
 };
 
-/* ver-1 blob (written by the previous firmware revision): same layout as
- * HistSnap WITHOUT the trailing int64_t last_ts field. Defined separately
- * (not reinterpreted as a HistSnap) so the field copy is explicit. */
-struct __attribute__((packed)) HistSnapV1 {
-    uint8_t  ver;
-    char     date[11];
-    float    kwh[24];
-    int32_t  wh_start[24];
-    int32_t  last_wh;
-    int32_t  last_hour;
-};
-static_assert(sizeof(HistSnapV1) == sizeof(HistSnap) - sizeof(int64_t),
-              "v1 snapshot must be HistSnap without last_ts");
+static NvsHistStore nvs_hist_store;
 
-/* one-time migration from the pre-blob firmware's five separate legacy keys
- * ("date" String, "kwh" bytes, "whstart" bytes, "lastwh", "lasthour"):
- * only tried when the "snap" blob is absent or invalid, so a valid v2
- * snapshot is never overwritten. last_ts is unknown (0) — the carry gate
- * simply stays closed until the first accepted sample of the new firmware. */
-static void hist_migrate_legacy(void)
+static struct tm* localtime_r_wrapper(const time_t* t, struct tm* out)
 {
-    if (s_hist.getBytesLength("kwh") != 24 * sizeof(float))
-        return;
-    String date = s_hist.getString("date", "");
-    if (date.length() != 10)
-        return;
-    if (s_hist.getBytesLength("whstart") != 24 * sizeof(int32_t))
-        return;
-
-    HistSnap snap;
-    memset(&snap, 0, sizeof(snap));
-    snap.ver = HIST_SNAP_VER;
-    if (s_hist.getBytes("kwh", snap.kwh, sizeof(snap.kwh)) != sizeof(snap.kwh)
-        || s_hist.getBytes("whstart", snap.wh_start, sizeof(snap.wh_start)) != sizeof(snap.wh_start))
-        return;                            /* read failed: fresh start */
-    snap.last_wh   = s_hist.getInt("lastwh", -1);
-    snap.last_hour = s_hist.getInt("lasthour", -1);
-    snap.last_ts   = 0;
-    strlcpy(snap.date, date.c_str(), sizeof(snap.date));
-
-    /* adopt locally exactly like a loaded snapshot — the data was read
-     * successfully, so the running display keeps it REGARDLESS of whether
-     * the converted blob could be written back */
-    memcpy(s_hist_kwh, snap.kwh, sizeof(s_hist_kwh));
-    memcpy(s_hist_wh_start, snap.wh_start, sizeof(s_hist_wh_start));
-    s_hist_last_wh   = snap.last_wh;
-    s_hist_last_hour = snap.last_hour;
-    s_hist_last_ts   = snap.last_ts;
-    memcpy(s_hist_date, snap.date, sizeof(s_hist_date));
-    s_hist_date[sizeof(s_hist_date) - 1] = '\0';
-
-    /* the legacy keys are the only PERSISTED copy of this data — do not
-     * delete them unless the snap blob is confirmed written (NVS may be
-     * full). On a failed write the in-memory state above is still correct
-     * and the next boot re-reads the legacy keys and retries. */
-    size_t written = s_hist.putBytes("snap", &snap, sizeof(snap));
-    if (written != sizeof(snap)) {
-        Serial.printf("[data] hourly history: snapshot save FAILED (%u/%u B) - legacy keys kept\n",
-                      (unsigned)written, (unsigned)sizeof(snap));
-        return;
-    }
-
-    s_hist.remove("date");
-    s_hist.remove("kwh");
-    s_hist.remove("whstart");
-    s_hist.remove("lastwh");
-    s_hist.remove("lasthour");
-    Serial.println("[data] hourly history: migrated legacy snapshot");
+    return localtime_r(t, out);
 }
-
-static void hist_load(void)
+static void serial_log_wrapper(const char* line)
 {
-    s_hist.begin("solarhist", false);
-    HistSnap snap;
-    size_t n = s_hist.getBytesLength("snap");
-    bool have_snap = false;
-
-    if (n == sizeof(snap) && s_hist.getBytes("snap", &snap, sizeof(snap)) == sizeof(snap)
-        && snap.ver == HIST_SNAP_VER) {
-        have_snap = true;                  /* adopt below */
-    } else if (n == sizeof(HistSnapV1)) {
-        /* old ver-1 blob (same layout without last_ts): convert in place so
-         * a firmware upgrade does not discard the saved bars. Runs BEFORE
-         * the five-key migration — a v1 snap and legacy five-key data are
-         * never both present in practice. */
-        HistSnapV1 v1;
-        if (s_hist.getBytes("snap", &v1, sizeof(v1)) == sizeof(v1) && v1.ver == 1u) {
-            HistSnap up;
-            memset(&up, 0, sizeof(up));
-            up.ver = HIST_SNAP_VER;
-            memcpy(up.date,     v1.date,     sizeof(up.date));
-            memcpy(up.kwh,      v1.kwh,      sizeof(up.kwh));
-            memcpy(up.wh_start, v1.wh_start, sizeof(up.wh_start));
-            up.last_wh   = v1.last_wh;
-            up.last_hour = v1.last_hour;
-            up.last_ts   = 0;              /* unknown: carry gate stays closed
-                                            * until the first accepted sample */
-            s_hist.putBytes("snap", &up, sizeof(up));
-            snap = up;
-            have_snap = true;
-            Serial.println("[data] hourly history: upgraded v1 snapshot");
-        }
-    }
-
-    if (have_snap) {
-        memcpy(s_hist_kwh, snap.kwh, sizeof(s_hist_kwh));
-        memcpy(s_hist_wh_start, snap.wh_start, sizeof(s_hist_wh_start));
-        s_hist_last_wh   = snap.last_wh;
-        s_hist_last_hour = snap.last_hour;
-        s_hist_last_ts   = snap.last_ts;
-        memcpy(s_hist_date, snap.date, sizeof(s_hist_date));
-        s_hist_date[sizeof(s_hist_date) - 1] = '\0';
-        Serial.printf("[data] hourly history loaded: %s (%d buckets set)\n",
-                      s_hist_date,
-                      s_hist_last_hour >= 0 ? s_hist_last_hour + 1 : 0);
-        return;
-    }
-
-    /* wrong size / unknown version / no snap at all: the five-key legacy
-     * migration is the LAST resort, else start fresh */
-    for (int i = 0; i < 24; i++) { s_hist_kwh[i] = -1.0f; s_hist_wh_start[i] = -1; }
-    s_hist_date[0] = '\0';
-    s_hist_last_wh = -1;
-    s_hist_last_hour = -1;
-    s_hist_last_ts = 0;
-    hist_migrate_legacy();
-    if (s_hist_date[0] == '\0')
-        Serial.println("[data] hourly history: none stored");
-}
-
-/* fold one wh_today sample into the buckets + persist (port of the
- * relay's _apply_sample: hour-boundary close, midnight reset, live partial) */
-static void hist_apply(uint32_t wh)
-{
-    time_t now = time(nullptr);
-    struct tm tmv;
-    localtime_r(&now, &tmv);
-    char today[11];
-    strftime(today, sizeof(today), "%Y-%m-%d", &tmv);
-
-    if (strcmp(today, s_hist_date) != 0) {           /* midnight rollover */
-        strcpy(s_hist_date, today);
-        for (int i = 0; i < 24; i++) { s_hist_kwh[i] = -1.0f; s_hist_wh_start[i] = -1; }
-        s_hist_last_wh = -1;
-        s_hist_last_hour = -1;
-        Serial.printf("[data] hourly: new day %s\n", today);
-    }
-    int hour = tmv.tm_hour;
-    if (hour != s_hist_last_hour) {                  /* close previous hour */
-        if (s_hist_last_hour >= 0 && s_hist_wh_start[s_hist_last_hour] >= 0
-            && s_hist_last_wh >= 0) {
-            s_hist_kwh[s_hist_last_hour] =
-                (s_hist_last_wh - s_hist_wh_start[s_hist_last_hour]) / 1000.0f;
-            Serial.printf("[data] hourly: closed hour %d at %.2f kWh\n",
-                          s_hist_last_hour,
-                          (double)s_hist_kwh[s_hist_last_hour]);
-        }
-        /* seed the new hour from the last sample of the old hour — but only
-           when the boundary was really the adjacent hour AND the previous
-           sample is fresh (gate vs. now_epoch). After a poll outage several
-           hours wide, carrying the stale wh would dump ALL of the missed
-           energy into this one recovery bar; instead start at the current
-           wh and the skipped hours stay -1 (no bar, not a wrong bar). */
-        bool hour_adjacent = (s_hist_last_hour + 1) % 24 == hour;
-        bool sample_fresh = s_hist_last_ts > 0
-                            && (time_t)s_hist_last_ts <= now
-                            && (now - (time_t)s_hist_last_ts) <= HIST_CARRY_FRESH_S;
-        s_hist_wh_start[hour] = (s_hist_last_wh >= 0 && hour_adjacent && sample_fresh)
-                                ? s_hist_last_wh : (int32_t)wh;
-        s_hist_last_hour = hour;
-    }
-    if (s_hist_wh_start[hour] >= 0)                 /* live partial */
-        s_hist_kwh[hour] = ((int32_t)wh - s_hist_wh_start[hour]) / 1000.0f;
-    s_hist_last_wh = (int32_t)wh;
-
-    HistSnap snap;
-    snap.ver = HIST_SNAP_VER;
-    memcpy(snap.date, s_hist_date, sizeof(snap.date));
-    memcpy(snap.kwh, s_hist_kwh, sizeof(snap.kwh));
-    memcpy(snap.wh_start, s_hist_wh_start, sizeof(snap.wh_start));
-    snap.last_wh   = s_hist_last_wh;
-    snap.last_hour = s_hist_last_hour;
-    s_hist_last_ts = (int64_t)now;         /* every accepted sample is fresh */
-    snap.last_ts   = s_hist_last_ts;
-    s_hist.putBytes("snap", &snap, sizeof(snap));
+    Serial.println(line);
 }
 #endif /* !SOLAR_POLL_VIA_RELAY */
 
@@ -498,8 +323,8 @@ static void push_solar(void)
 #else
     int rc = fetch_enphase(&watts_now, &wh_today, &watts_peak);
     if (rc == 0) {
-        hist_apply(wh_today);
-        memcpy(hourly, s_hist_kwh, sizeof(hourly));
+        solar_hist_apply(wh_today, time(nullptr));
+        memcpy(hourly, solar_hist_kwh(), sizeof(hourly));
     }
 #endif
     uint32_t tw = millis();
@@ -821,7 +646,7 @@ void dashboard_data_init(void)
        or the relay's epoch field (relay mode); serial TIME stays as the
        manual fallback. */
 #if !SOLAR_POLL_VIA_RELAY
-    hist_load();
+    solar_hist_init(&nvs_hist_store, localtime_r_wrapper, serial_log_wrapper);
 #endif
 
     printf("[data] connecting to WiFi network \"%s\"...\n", WIFI_SSID);
