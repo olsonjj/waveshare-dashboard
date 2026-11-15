@@ -132,6 +132,18 @@ rst:0x3 (RTC_SW_SYS_RST) loop + boot errors      — crash loop at bootloader st
 
 ## Ideas / next steps
 
+*(v1-era list, kept for the ones still relevant; stale items pruned 2025-11-14)*
+
+*The truly evergreen ones (still true, kept from v1):*
+
+- [ ] Keep `LV_USE_PERF_MONITOR` while iterating visuals (on screen bottom-right).
+- [ ] **Do NOT** move the LVGL adapter task to core 0 or raise its priority: tested priority 4/core 0 →
+      screen refresh starves (tearing/jumping, 3 FPS) because the RGB bounce-buffer/refresh path lives on core 0.
+      Known-good: priority 2, core = ARDUINO_RUNNING_CORE(1).
+- [ ] Decide whether native-USB CDC logs are worth it (would require EXIO5 handling + second cable for power).
+- [ ] Serial monitor: VS Code command `PlatformIO: Monitor` or `pio device monitor --port /dev/cu.usbmodem5B901265491 -f esp32_exception_decoder`.
+- [x] ~~Replace `lv_demo_widgets()` with first custom UI~~ done in v2 (2025-11-14).
+
 ## v2 "Solar Ops" design (branch `design-mockup`, 2025-11-14)
 
 Mockup-faithful two-tab dashboard built in `src/dashboard_ui.cpp` (tokens in `src/ui_tokens.h`):
@@ -195,11 +207,25 @@ LVGL, runs it in a window, and `hostsim/crop.py` / `raw2png.py` convert framebuf
 the chat-image pipeline mangles large/portrait PNGs — verify oddities with `crop.py` + pixel probes
 before "fixing" anything. `./sim dump` prints the widget tree with absolute coords.
 
-- [ ] Verify FPS counter after PCLK 21 MHz bump (was 16 MHz); tune `adapter_config.task_priority` (2) if LVGL CPU%
-      reads high; consider `-DCONFIG_SPIRAM` fetch/XIP options (Arduino 3.3 sdkconfig may already XIP).
-- [ ] **Do NOT** move the LVGL adapter task to core 0 or raise its priority: tested priority 4/core 0 →
-      screen refresh starves (tearing/jumping, 3 FPS) because the RGB bounce-buffer/refresh path lives on core 0.
-      Known-good: priority 2, core = ARDUINO_RUNNING_CORE(1) → ~33 FPS at the widgets demo.
-- [ ] Replace `lv_demo_widgets()` with first custom UI; keep `LV_USE_PERF_MONITOR` while iterating visuals.
-- [ ] Decide whether native-USB CDC logs are worth it (would require EXIO5 handling + second cable for power).
-- [ ] Serial monitor: VS Code command `PlatformIO: Monitor` or `pio device monitor --port /dev/cu.usbmodem5B901265491 -f esp32_exception_decoder`.
+### Performance learnings from external sources
+
+From reviewing "LVGL Too Slow? Do THIS for Maximum FPS!" (Garage Tinkering,
+youtube.com/watch?v=K42VbYoDgjU — ESP32-S3 + LVGL 9 SPI gauge, 5 FPS → ~50 FPS applied):
+
+- ✅ **`LV_DISP_DEF_REFR_PERIOD` 30 → 20 ms** — applied + user-verified (see baseline above); 20 ms was
+  his measured sweet spot (~50 FPS); diminishing returns beyond (30 → 100 → 200 FPS cap tested, no visible gain).
+- ✅ **Quiet radio cadence** — his ESP-Now bombardment case is the same mechanism as our glitch fix above.
+- ⬜ **Frame buffer count 2 → 3** — cheap open experiment if we ever need more; RGB path already DMAs
+  full framebuffers from PSRAM (750 KB each, 8 MB PSRAM so it's affordable). Would mainly help during
+  full-screen redraws (tab switches). He saw mixed +0–20%.
+- ✗ **Full render mode** — rejected: fixes banding/tearing of one moving line but tanks FPS (33 → 2-3).
+- ✗ **LVGL 9 migration for scale/meter internals** — real gains (v8 `lv_meter` redraws all ticks when
+  the needle moves; v9 scales don't), but we avoid `lv_meter` entirely (plain `lv_arc` + `lv_chart`),
+  so the payoff doesn't justify a vendored-stack + adapter migration yet.
+- ✗ Revisit if we ever add fast-updating gauge widgets: keep per-screen "active" (fast-changing)
+  components few — our dashboard is deliberately passive (clock tick, bounded data polls).
+
+Open ideas, cheapest first:
+1. Real WiFi credentials in `include/secrets.h` (gitignored) → connected-state fetches are one brief
+   HTTPS transaction/minute; if panel noise ever reappears while connected, that's the thing to bisect.
+2. Move fetches to a dedicated low-priority task if that poll ever shows up in the FPS overlay.
