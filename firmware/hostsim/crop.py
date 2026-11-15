@@ -20,7 +20,8 @@ def main(argv):
             g = ((v >> 5) & 0x3F) << 2
             b = (v & 0x1F) << 3
             row += bytes((r, g, b)) * z   # zoom = pixel repetition
-        raw += row * z
+        # each repeated row is its own scanline and needs a filter byte
+        raw += b''.join(b'\x00' + bytes(row) for _ in range(z))
     def chunk(tag, payload):
         c = struct.pack('>I', len(payload)) + tag + payload
         return c + struct.pack('>I', zlib.crc32(tag + payload) & 0xFFFFFFFF)

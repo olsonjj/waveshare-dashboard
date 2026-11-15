@@ -15,6 +15,9 @@ def main(src, dst):
         g = ((v >> 5) & 0x3F) << 2
         b = (v & 0x1F) << 3
         raw += bytes((r, g, b))
+    # PNG scanlines need a filter-type byte; emit filter 0 (None) per row.
+    raw = bytearray(
+        b''.join(b'\x00' + bytes(raw[y * W * 3:(y + 1) * W * 3]) for y in range(H)))
     def chunk(tag, payload):
         c = struct.pack('>I', len(payload)) + tag + payload
         return c + struct.pack('>I', zlib.crc32(tag + payload) & 0xFFFFFFFF)

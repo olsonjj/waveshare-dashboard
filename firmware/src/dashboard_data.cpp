@@ -78,6 +78,10 @@ static void schedule_next_poll(void)
 
 /* ---------- fetchers ---------- */
 
+/* Relay payloads carry the Envoy's sample age; beyond this limit the value
+ * is too old to render as "live" solar data — treat the fetch as failed. */
+static const float RELAY_STALE_LIMIT_S = 180.0f;
+
 /* LAN relay (relay/solar_relay.py on the Mac): tiny JSON over plain HTTP.
  * The direct Envoy TLS path works but takes ~29 s per phase from the board
  * (radio airtime the panel can't afford); the relay fetches the Envoy on
@@ -112,6 +116,12 @@ static int fetch_solar_relay(uint32_t *watts_now, uint32_t *wh_today,
         Serial.printf("[data] relay JSON parse failed: %s\n", err.c_str());
         return -2;
     }
+    float age_s = doc["age_s"] | 0.0f;
+    if (age_s > RELAY_STALE_LIMIT_S) {
+        Serial.printf("[data] relay payload STALE: age %.1f s > limit %.1f s - dropping\n",
+                      (double)age_s, (double)RELAY_STALE_LIMIT_S);
+        return -3;
+    }
     *watts_now = doc["watts_now"] | 0u;
     *wh_today   = doc["wh_today"] | 0u;
     *watts_peak = doc["watts_peak_today"] | 0u;
@@ -139,7 +149,7 @@ static int fetch_solar_relay(uint32_t *watts_now, uint32_t *wh_today,
     }
     Serial.printf("[data] relay: %lu W, %lu Wh today (dt=%lu ms, age %0.1f s)\n",
                   (unsigned long)*watts_now, (unsigned long)*wh_today,
-                  (unsigned long)(millis() - t0), (double)(doc["age_s"] | 0.0));
+                  (unsigned long)(millis() - t0), (double)age_s);
     return 0;
 }
 #endif /* SOLAR_POLL_VIA_RELAY */
@@ -270,20 +280,40 @@ static int32_t  s_hist_wh_start[24];
 static int32_t  s_hist_last_wh = -1;
 static int      s_hist_last_hour = -1;
 
+/* The whole snapshot is stored as ONE versioned blob: a power failure or
+ * reset between five separate Preferences commits used to pair a new date
+ * with yesterday's buckets (midnight rollover then never fired).
+ * Packed so the NVS byte size is compiler-independent. */
+#define HIST_SNAP_VER 1u
+struct __attribute__((packed)) HistSnap {
+    uint8_t  ver;
+    char     date[11];                     /* "YYYY-MM-DD" + NUL          */
+    float    kwh[24];
+    int32_t  wh_start[24];
+    int32_t  last_wh;
+    int32_t  last_hour;
+};
+
 static void hist_load(void)
 {
     s_hist.begin("solarhist", false);
-    String saved = s_hist.getString("date", "");
-    size_t n = s_hist.getBytes("kwh", s_hist_kwh, sizeof(s_hist_kwh));
-    s_hist.getBytes("whstart", s_hist_wh_start, sizeof(s_hist_wh_start));
-    s_hist_last_wh   = s_hist.getInt("lastwh", -1);
-    s_hist_last_hour = s_hist.getInt("lasthour", -1);
-    if (n == sizeof(s_hist_kwh) && saved.length() == 10) {
-        strncpy(s_hist_date, saved.c_str(), sizeof(s_hist_date) - 1);
+    HistSnap snap;
+    size_t n = s_hist.getBytesLength("snap");
+    if (n == sizeof(snap) && s_hist.getBytes("snap", &snap, sizeof(snap)) == sizeof(snap)
+        && snap.ver == HIST_SNAP_VER) {
+        memcpy(s_hist_kwh, snap.kwh, sizeof(s_hist_kwh));
+        memcpy(s_hist_wh_start, snap.wh_start, sizeof(s_hist_wh_start));
+        s_hist_last_wh   = snap.last_wh;
+        s_hist_last_hour = snap.last_hour;
+        memcpy(s_hist_date, snap.date, sizeof(s_hist_date));
+        s_hist_date[sizeof(s_hist_date) - 1] = '\0';
         Serial.printf("[data] hourly history loaded: %s (%d buckets set)\n",
                       s_hist_date,
                       s_hist_last_hour >= 0 ? s_hist_last_hour + 1 : 0);
     } else {
+        /* wrong size or unknown version: start fresh */
+        for (int i = 0; i < 24; i++) { s_hist_kwh[i] = -1.0f; s_hist_wh_start[i] = -1; }
+        s_hist_date[0] = '\0';
         Serial.println("[data] hourly history: none stored");
     }
 }
@@ -315,18 +345,23 @@ static void hist_apply(uint32_t wh)
                           s_hist_last_hour,
                           (double)s_hist_kwh[s_hist_last_hour]);
         }
-        s_hist_wh_start[hour] = (int32_t)wh;
+        /* seed the new hour from the last sample of the old hour, else the
+           energy between the sample boundary and the first read here is lost */
+        s_hist_wh_start[hour] = (s_hist_last_wh >= 0) ? s_hist_last_wh : (int32_t)wh;
         s_hist_last_hour = hour;
     }
     if (s_hist_wh_start[hour] >= 0)                 /* live partial */
         s_hist_kwh[hour] = ((int32_t)wh - s_hist_wh_start[hour]) / 1000.0f;
     s_hist_last_wh = (int32_t)wh;
 
-    s_hist.putString("date", s_hist_date);
-    s_hist.putBytes("kwh", s_hist_kwh, sizeof(s_hist_kwh));
-    s_hist.putBytes("whstart", s_hist_wh_start, sizeof(s_hist_wh_start));
-    s_hist.putInt("lastwh", s_hist_last_wh);
-    s_hist.putInt("lasthour", s_hist_last_hour);
+    HistSnap snap;
+    snap.ver = HIST_SNAP_VER;
+    memcpy(snap.date, s_hist_date, sizeof(snap.date));
+    memcpy(snap.kwh, s_hist_kwh, sizeof(snap.kwh));
+    memcpy(snap.wh_start, s_hist_wh_start, sizeof(snap.wh_start));
+    snap.last_wh   = s_hist_last_wh;
+    snap.last_hour = s_hist_last_hour;
+    s_hist.putBytes("snap", &snap, sizeof(snap));
 }
 #endif /* !SOLAR_POLL_VIA_RELAY */
 

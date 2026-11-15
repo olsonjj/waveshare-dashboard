@@ -1,7 +1,7 @@
 # Solar Ops Dashboard
 
 A wall-mounted solar-telemetry HMI for the **Waveshare ESP32-S3-Touch-LCD-7**
-(1024×600, 7", RGB + touch), built with PlatformIO / arduino-esp32 / LVGL 8.
+(800×480, 7", RGB + touch), built with PlatformIO / arduino-esp32 / LVGL 8.
 The board shows live production from an Enphase IQ Gateway — current power,
 today's yield, peak, and a 24-hour generation bar graph — over Wi-Fi, with a
 wall clock synced without SNTP.
