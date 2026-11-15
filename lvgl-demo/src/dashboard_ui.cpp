@@ -8,8 +8,10 @@
  *   Tab 2 "GITHUB OPS"      — intentionally empty for now (design only).
  *
  * All data is mock/static (values from the mockup); a 1 s timer ticks the
- * header clock. Hand-rolled tab header for full badge/pill styling.
+ * header clock from the system clock (TZ set in main.cpp). Hand-rolled tab
+ * header for full badge/pill styling.
  */
+#include <time.h>
 #include "dashboard_ui.h"
 #include "ui_tokens.h"
 
@@ -692,11 +694,11 @@ static void build_chart_card(lv_obj_t *parent)
 /* ------------------------------------------------------------------ */
 static void clock_timer_cb(lv_timer_t *)
 {
-    static int32_t sec = 14 * 3600 + 38 * 60 + 22;
-    sec = (sec + 1) % 86400;
+    time_t now = time(nullptr);
+    struct tm tmbuf;
+    localtime_r(&now, &tmbuf);
     char buf[16];
-    snprintf(buf, sizeof(buf), "%02d:%02d:%02d", (int)(sec / 3600),
-             (int)((sec % 3600) / 60), (int)(sec % 60));
+    strftime(buf, sizeof(buf), "%H:%M:%S", &tmbuf);
     lv_label_set_text(clock_label, buf);
 }
 

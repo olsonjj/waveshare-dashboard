@@ -144,6 +144,18 @@ rst:0x3 (RTC_SW_SYS_RST) loop + boot errors      — crash loop at bootloader st
 - [ ] Serial monitor: VS Code command `PlatformIO: Monitor` or `pio device monitor --port /dev/cu.usbmodem5B901265491 -f esp32_exception_decoder`.
 - [x] ~~Replace `lv_demo_widgets()` with first custom UI~~ done in v2 (2025-11-14).
 
+## Wall clock (upper-right header)
+
+- Header clock reads the **system time** (`localtime_r`, 1 s tick) with `TZ=PST8PDT,M3.2.0,M11.1.0`
+  (DST aware: UTC−8 winter / UTC−7 summer; user in Pacific time).
+- No RTC battery and no NTP yet, so `main.cpp` seeds the soft RTC from the **build timestamp**
+  (`__DATE__`/`__TIME__`, stamped in host-local Pacific) on every boot — accurate ~1 min after
+  flash/power cycle; the soft RTC keeps time across soft resets while powered.
+- **Serial sync command** (always active, even with `DBG1_NO_WIFI`): `TIME hh:mm:ss` (keeps today's
+  date), `TIME yyyy-mm-dd hh:mm:ss`, `TIME ?` (query). Verified set/query on device 2026-11-14.
+- Future: once real WiFi creds exist, add SNTP in `dashboard_data.cpp` (`configTime` + pool) to
+  self-correct; the serial command stays as the offline fallback.
+
 ## v2 "Solar Ops" design (branch `design-mockup`, 2025-11-14)
 
 Mockup-faithful two-tab dashboard built in `src/dashboard_ui.cpp` (tokens in `src/ui_tokens.h`):
