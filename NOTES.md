@@ -129,6 +129,49 @@ rst:0x3 (RTC_SW_SYS_RST) loop + boot errors      — crash loop at bootloader st
 
 ## Ideas / next steps
 
+## v2 "Solar Ops" design (branch `design-mockup`, 2025-11-14)
+
+Mockup-faithful two-tab dashboard built in `src/dashboard_ui.cpp` (tokens in `src/ui_tokens.h`):
+
+- **Header (52 px)**: hand-rolled tab buttons (not `lv_tabview` — needed badges/pills inside the
+  buttons): ☀ SOLAR TELEMETRY + solid-amber `LIVE` pill, GitHub mark + green `2 REPOS` pill, amber
+  underline swap on tab select. Right cluster: `Sync: 1s` chip (cyan dot), 3 green signal bars,
+  bordered clock chip (1 s timer, starts 14:38:22).
+- **Solar tab**: CURRENT POWER card (amber accent bar, `REALTIME` pill, 3.84 kW @48 pt, green ▲
+  peak row, 76% LOAD donut `lv_arc`), TOTAL YIELD card (green accent, `+14% vs avg` pill, 21.65 kWh,
+  target pill, green→yellow gradient `lv_bar`), chart card (`lv_chart` LINE 48 pts 05:00–20:00,
+  under-curve gradient painted into a PSRAM `lv_canvas` sibling placed under the transparent chart,
+  dashed grid as canvas children, y/x labels as manual labels, `Max 4.85` marker, dashed cyan
+  "now" cursor at 14:38 with tooltip).
+- **GitHub tab**: intentionally empty (design only). Tab switching works (touch /
+  `dashboard_ui_select_tab()`).
+
+### v2 gotchas (each cost time — read before editing)
+
+1. **Theme padding must be zeroed everywhere** (`pad_all 0` on panels/buttons/chips/canvases) — the
+   default theme pads (~16 px) stack per container level and shift/clip everything; layout looks
+   fine in `lv_obj_get_coords` but paints off-screen.
+2. **`lv_obj_align_to(one-shot)`** computes from current coords (it refreshes layout internally, but
+   only at the moment you call it). Safe here because every call site refreshes the screen layout;
+   do not move calls before the reference object exists.
+3. **Chart series values are in the chart's range units** (0..5000); the mock curve is stored in
+   0.01 kW (0..485) — multiply by 10 when filling `y_points`.
+4. **No em dash in Montserrat** — `SOLAR GENERATION CURVE — TODAY` with a missing-glyph U+2014 made
+   the title label render repeated/looped (treated as scroll-circular). Use `-` / ASCII only, or add
+   the glyph via a custom font later.
+5. Icons that need glyphs the builtin fonts lack (☀, ▲, octocat) are drawn as tiny
+   `LV_IMG_CF_TRUE_COLOR_ALPHA` canvases (`make_sun_icon` / `make_gh_icon` / `make_tri`).
+6. `LV_MEM_SIZE` raised 48 KB → **128 KB** in both `lib/lv_conf.h` and `include/lv_conf.h` (still
+   in sync, see gotcha 3 in the section above). RAM now 56% (183 KB of 320 KB).
+
+### Host simulator (`hostsim/`) — *self-review without hardware*
+
+`hostsim/build.sh snap` compiles the SAME `src/dashboard_ui.cpp` against macOS SDL2 + the vendored
+LVGL, runs it in a window, and `hostsim/crop.py` / `raw2png.py` convert framebuffer dumps to PNG.
+`hostsim/reference_tab1.png` / `reference_tab2.png` are the final rendered references. Useful because
+the chat-image pipeline mangles large/portrait PNGs — verify oddities with `crop.py` + pixel probes
+before "fixing" anything. `./sim dump` prints the widget tree with absolute coords.
+
 - [ ] Verify FPS counter after PCLK 21 MHz bump (was 16 MHz); tune `adapter_config.task_priority` (2) if LVGL CPU%
       reads high; consider `-DCONFIG_SPIRAM` fetch/XIP options (Arduino 3.3 sdkconfig may already XIP).
 - [ ] **Do NOT** move the LVGL adapter task to core 0 or raise its priority: tested priority 4/core 0 →
