@@ -27,5 +27,5 @@ void dashboard_data_tick(void);
 #define DATA_POLL_INTERVAL_MS (60UL * 1000UL)
 
 /** Timeouts */
-#define WIFI_CONNECT_TIMEOUT_MS  (20UL * 1000UL)
+#define WIFI_CONNECT_TIMEOUT_MS  (10UL * 1000UL)
 #define HTTP_TIMEOUT_MS          (8UL * 1000UL)

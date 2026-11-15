@@ -199,6 +199,23 @@ never touched), `WIFI_CONNECTING` (one 20 s attempt), then `WIFI_BACKOFF` ladder
 disabled — we own the cadence). Blocking `delay()` removed; heartbeats print again. Verified on serial:
 attempt → "retry in 15 s" → quiet.
 
+**Follow-up experiments (same day)**:
+
+- **E2 — interaction stress with radio compiled out**: user confirmed *noise-free* while tap/tab-switching
+  rapidly → the render path (PSRAM canvas blit under 20 ms refresh) is healthy; radio bursts are the sole cause.
+- **User video (IMG_2622.MOV, 1.5 s @ 30 fps) analyzed with ffmpeg**: per-frame diffs + motion-compensated
+  residual show transient **dash-shaped ghost rows** below the tab title = row pixels caught mid-write by the
+  panel DMA (classic tearing band artifact — not EMI glitter, not camera noise: global brightness rock-stable,
+  residual hugs glyph edges, position flickers frame to frame).
+- **Noise returned once during the backoff build**: serial showed attempt 4's connect window active at exactly
+  that moment → each radio-ON window still perturbs the panel, even with long quiet gaps in between.
+
+**Final state**: `secrets.h` set to empty SSID/PASS = "not provisioned" → data layer stays fully off (the
+proven-quiet E1 state); connect attempt window shortened 20 s → 10 s; the backoff ladder only resumes once
+real credentials are entered. When provisioning real WiFi, watch the panel through the first ladder run;
+if bursts still bite, mitigations in order: fast-scan, dedicated task pinning, or schedule attempts only at
+boot + manual trigger.
+
 ### Host simulator (`hostsim/`) — *self-review without hardware*
 
 `hostsim/build.sh snap` compiles the SAME `src/dashboard_ui.cpp` against macOS SDL2 + the vendored
