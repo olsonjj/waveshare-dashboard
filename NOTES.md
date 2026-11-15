@@ -265,3 +265,54 @@ Open ideas, cheapest first:
 1. Real WiFi credentials in `include/secrets.h` (gitignored) → connected-state fetches are one brief
    HTTPS transaction/minute; if panel noise ever reappears while connected, that's the thing to bisect.
 2. Move fetches to a dedicated low-priority task if that poll ever shows up in the FPS overlay.
+
+## Real-data session (2026-11-15, branch `real-data`)
+
+Goal: real WiFi creds in secrets.h → Enphase solar data on the Solar tab.
+
+### WiFi radio + panel noise — final picture (experiments E3–E6)
+
+* **E3** (radio on, fetches compiled out): quiet ~90 s, then pulses returned → connected-idle radio alone is NOT fully quiet.
+* **E4** (`WiFi.setSleep(false)` — modem power-save OFF): **quiet 5+ min, user-verified.** Beacon-wakeup bursts were the connected-idle noise source. `setSleep(false)` is permanent policy now (wall-powered board).
+* **E5** (fetches on): noise returns exactly during sustained TLS radio activity. Noise is proportional to **radio airtime**, not print volume.
+* **E6** (UART hardening: 921600 baud + 4 KB TX ring + `esp_log_level_set("wifi"/"wifi_init"/"phy", NONE)` + CORE_DEBUG_LEVEL=1): noise **unchanged** → serial/UART theory dead. (User also ran board with UART unplugged, USB-C power: same.)
+* Escalation ladder unexercised (fast-scan / task pinning / PCLK down) — keep as levers. PCLK effective value is **16 MHz** in `lib/esp_panel_board_custom_conf.h` (the 21 MHz note refers to the inert `src/` copy — config drift, fix when convenient). Bounce buffers ON (width×10).
+
+### TLS findings (board-side fully exonerated)
+
+* arduino-esp32 3.3 `NetworkClientSecure`: `setHandshakeTimeout` is a watchdog checked *between* handshake records; real per-I/O bound is `setTimeout()` (SO_RCVTIMEO). Worst wall ≈ DNS + connect-select + 1–2 blocking recvs (see /tmp/tls_research.md).
+* `lastError` "UNKNOWN ERROR CODE (0050)" after a *successful* socket = fd number artifact, ignore. `CONN_EOF` = peer FIN during handshake.
+* **Board TLS proven healthy**: full handshake to a local test server incl. 5.3 KB cert chain, real x509 verification, correct alert on bad cert. Board's 292-B ClientHello captured and verified well-formed (mbedtls TLS1.2, 81 ciphers, SNI).
+* **WAN TLS to GitHub/Google fails** (EOF ~40–70 s) from BOTH SSIDs, while Mac TLS works from the same network and even the board's exact ClientHello replayed from the Mac gets a server response. Network-side filtering that singles out this device's flows — **unresolved, deprioritized** (relay path makes it moot for solar; revisit for the GitHub tab).
+* Amplifi Alien: main SSID `YapioHome` (192.168.182.x) vs `YapioHome-IoT` (192.168.251.x) are isolated segments (cross-segment TCP refused in ~8 ms; ping passes). Board currently on main.
+
+### Enphase Envoy integration (the Solar tab's data source)
+
+* Gateway: IQ Gateway D8.3.5433 at `192.168.182.102`, self-signed TLS + Bearer token (see `~/Code/enphase-test/ENPHASE-LOCAL-API.md`; creds in `~/Code/enphase-test/.env` and now `lvgl-demo/include/secrets.h`).
+* Source of truth: `GET /ivp/pdm/energy` → `production.pcu` → `wattsNow`, `wattHoursToday`.
+* **Envoy ↔ board is intrinsically slow**: TLS handshake ~26–29 s, GET phase ~29 s (713-B response!), every attempt, RSSI -44 dBm. Envoy closes the connection within 60 s idle (keep-alive reuse gives nothing at a 60-s poll). Same exchanges from the Mac: ~0.3 s. Board↔Mac TLS: 1.1 s. Suspected Envoy-side client throttling of unknown devices; root cause not chased (relay sidesteps it).
+* Direct fetch DID work end-to-end (real data on the panel) but = ~56 s radio/min = constant panel noise.
+
+### Relay architecture (adopted)
+
+`relay/solar_relay.py` — runs on an always-on Mac/Pi: fetches the Envoy (fast path, 30-s cache) and serves `GET /solar` → `{watts_now, wh_today, watt_hours_lifetime, age_s}` over plain LAN HTTP:8420 with `X-Relay-Key` shared secret. Board's poll becomes a ~1-s LAN blip.
+* Board wiring TODO: plain-HTTP fetcher in `dashboard_data.cpp` + `RELAY_URL`/`RELAY_KEY` in secrets.h; keep the Envoy TLS fetcher as fallback.
+
+### Serial console changes
+
+* Baud now **921600** (was 115200) — CH343P handles it; 4 KB TX ring set before `Serial.begin`. Update pyserial one-shots accordingly.
+* New serial commands: `FETCH` (one solar fetch now), `PROBE host[:port]` (443=TLS probe w/ CA bundle, 80=plain TCP HEAD, `RSSI`=signal), `PROBE RAW:host:port` (connect + minimal TLS-prefix bytes + 60-s connection-state watch), `PROBE BIG:example.com:80` (1.1 KB TX + response timing).
+* `dashboard_data_fetch_now()` public API added for FETCH.
+
+### Firmware state on branch `real-data` (uncommitted at time of writing)
+
+* Solar tab: `dashboard_ui_set_solar(watts, wh_today)` wired to CURRENT POWER + TOTAL YIELD cards (was stubbed/mock).
+* Poller: Enphase fetch every 60 s (direct, slow) — to be switched to relay.
+* SNTP added but **TZ bug**: `configTime(0,0,...)` clobbered TZ → clock shows UTC. Fix: `configTzTime("PST8PDT,M3.2.0,M11.1.0", "pool.ntp.org", ...)`.
+
+### Session wrap-up (2026-11-15)
+
+* **SNTP was the once-per-boot loop wedge** (24–40 s freeze right after the first fetch): present in every build with `configTzTime`/`configTime`, absent in every build without. Wall clock now syncs from the **relay's `epoch` field** (relay host is NTP-synced; board calls `settimeofday` when drift > 5 s, TZ from `main.cpp` stays authoritative). SNTP stays disabled; serial `TIME` remains the offline fallback. User-verified: clock correct (`11:03:44 PST`), no stall, clean idle cadence from t=10 s.
+* **Relay adopted as the scheduled poll path**: board → `relay/solar_relay.py` (Mac, `http://<mac>:8420/solar`, `X-Relay-Key`) → Envoy. Fetch ~1.7 s every 60 s (~3% radio duty). Direct Envoy TLS fetcher kept in firmware as fallback/diagnostic (unscheduled).
+* First relay-era boots: no noise reported during the short polls (panel-quiet confirmation pending user check at wrap-up).
+* Uncommitted-work risk noted: commit after this wrap-up.

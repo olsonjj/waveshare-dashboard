@@ -13,9 +13,14 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <NetworkClient.h>
 #include <NetworkClientSecure.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
+#include <esp_log.h>
+#include <sys/time.h>
+#include <time.h>
+#include <stdlib.h>
 
 #include "esp_lv_adapter_arduino.h"   // esp_lv_adapter_lock/unlock for UI updates
 #include "dashboard_ui.h"
@@ -55,7 +60,7 @@ static void radio_off(void)
 static void radio_up_and_connect(void)
 {
     WiFi.mode(WIFI_STA);
-    WiFi.setSleep(true);
+    WiFi.setSleep(false);          // E4: modem power-save off (beacon wakeups perturbed panel)
     WiFi.begin(WIFI_SSID, WIFI_PASS);
     enter_state(WIFI_CONNECTING);
 }
@@ -72,16 +77,196 @@ static void schedule_next_poll(void)
 }
 
 /* ---------- fetchers ---------- */
+
+/* LAN relay (relay/solar_relay.py on the Mac): tiny JSON over plain HTTP.
+ * The direct Envoy TLS path works but takes ~29 s per phase from the board
+ * (radio airtime the panel can't afford); the relay fetches the Envoy on
+ * its fast path and serves us a sub-second LAN GET. */
+static int fetch_solar_relay(uint32_t *watts_now, uint32_t *wh_today)
+{
+    uint32_t t0 = millis();
+    HTTPClient http;
+    if (!http.begin(RELAY_URL)) {
+        return -1;
+    }
+    http.setConnectTimeout(8000);
+    http.setTimeout(8000);
+    http.addHeader("X-Relay-Key", RELAY_KEY);
+
+    int code = http.GET();
+    if (code != 200) {
+        Serial.printf("[data] relay HTTP error %d (%s) dt=%lu ms\n",
+                      code, http.errorToString(code).c_str(),
+                      (unsigned long)(millis() - t0));
+        http.end();
+        return -1;
+    }
+    String payload = http.getString();
+    http.end();
+
+    JsonDocument doc;                    // payload is ~90 bytes; no filter needed
+    DeserializationError err = deserializeJson(doc, payload);
+    if (err) {
+        Serial.printf("[data] relay JSON parse failed: %s\n", err.c_str());
+        return -2;
+    }
+    *watts_now = doc["watts_now"] | 0u;
+    *wh_today   = doc["wh_today"] | 0u;
+
+    /* wall clock: the relay's host clock is NTP-synced; SNTP on the board
+       wedges the loop ~24-40 s after boot (see NOTES.md 2026-11-15), so sync
+       the soft RTC from here instead. Only nudge when drift > 5 s. */
+    time_t epoch = doc["epoch"] | (time_t)0;
+    if (epoch != 0) {
+        if ((time_t)llabs((long long)(time(nullptr) - epoch)) > 5) {
+            struct timeval tv = { epoch, 0 };
+            settimeofday(&tv, nullptr);
+            Serial.println("[data] clock synced from relay");
+        }
+    }
+    Serial.printf("[data] relay: %lu W, %lu Wh today (dt=%lu ms, age %0.1f s)\n",
+                  (unsigned long)*watts_now, (unsigned long)*wh_today,
+                  (unsigned long)(millis() - t0), (double)(doc["age_s"] | 0.0));
+    return 0;
+}
+
+/* Enphase IQ Gateway direct fetch — kept as fallback/diagnostic path.
+ * Enphase IQ Gateway (local LAN): GET /ivp/pdm/energy -> production.pcu.
+ * Gateway serves TLS with a SELF-SIGNED cert (verified device on our own
+ * LAN) so verification is intentionally disabled here. */
+/* kept across polls: the Envoy handshake is slow (~21 s) but keep-alive
+ * works, so reuse the session and only re-handshake when it drops */
+static NetworkClientSecure s_envoy_tls;
+
+static int fetch_enphase(uint32_t *watts_now, uint32_t *wh_today)
+{
+    uint32_t t0 = millis();
+    if (!s_envoy_tls.connected()) {
+        s_envoy_tls.setInsecure();                 // self-signed gateway cert
+        s_envoy_tls.setHandshakeTimeout(40);       // slow-but-working handshake (see NOTES.md)
+        s_envoy_tls.setTimeout(15000);
+        if (!s_envoy_tls.connect(ENVOY_HOST, 443)) {
+            char tls_msg[128] = {0};
+            s_envoy_tls.lastError(tls_msg, sizeof(tls_msg));
+            Serial.printf("[data] envoy connect FAIL dt=%lu ms err=[%s]\n",
+                          (unsigned long)(millis() - t0), tls_msg);
+            s_envoy_tls.stop();                   // clean slate for next attempt
+            return -1;
+        }
+        Serial.printf("[data] envoy tls handshake dt=%lu ms\n",
+                      (unsigned long)(millis() - t0));
+    } else {
+        Serial.println("[data] envoy reusing connection");
+    }
+
+    HTTPClient http;
+    char url[96];
+    snprintf(url, sizeof(url), "https://%s/ivp/pdm/energy", ENVOY_HOST);
+    if (!http.begin(s_envoy_tls, url)) {
+        s_envoy_tls.stop();
+        return -1;
+    }
+    http.setReuse(true);                  // keep the TLS session alive across polls
+    http.setConnectTimeout(8000);
+    http.setTimeout(8000);
+    http.addHeader("Authorization", "Bearer " ENVOY_TOKEN);
+    http.addHeader("Accept", "application/json");
+
+    int code = http.GET();
+    uint32_t t_hdr = millis();
+    if (code != 200) {
+        Serial.printf("[data] envoy HTTP error %d (%s) dt=%lu ms\n",
+                      code, http.errorToString(code).c_str(),
+                      (unsigned long)(t_hdr - t0));
+        http.end();
+        s_envoy_tls.stop();                // don't reuse a dead session
+        return -1;
+    }
+    String payload = http.getString();
+    http.end();
+    uint32_t t_body = millis();
+
+    JsonDocument filter;
+    filter["production"]["pcu"]["wattsNow"] = true;
+    filter["production"]["pcu"]["wattHoursToday"] = true;
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, payload,
+        DeserializationOption::Filter(filter));
+    if (err) {
+        Serial.printf("[data] envoy JSON parse failed: %s\n", err.c_str());
+        return -2;
+    }
+    *watts_now = doc["production"]["pcu"]["wattsNow"] | 0u;
+    *wh_today   = doc["production"]["pcu"]["wattHoursToday"] | 0u;
+    Serial.printf("[data] envoy: %lu W, %lu Wh today (get %lu ms, body %lu ms, %u B)\n",
+                  (unsigned long)*watts_now, (unsigned long)*wh_today,
+                  (unsigned long)(t_hdr - t0), (unsigned long)(t_body - t_hdr),
+                  (unsigned)payload.length());
+    return 0;
+}
+
+static void push_solar(void)
+{
+    uint32_t watts_now = 0, wh_today = 0;
+    int rc = fetch_solar_relay(&watts_now, &wh_today);
+    uint32_t tw = millis();
+    /* bounded lock: a wedged LVGL task must never freeze the data layer —
+       skip the UI update this cycle instead of waiting forever */
+    if (esp_lv_adapter_lock(pdMS_TO_TICKS(5000)) == ESP_OK) {
+        if (rc == 0) {
+            dashboard_ui_set_solar(watts_now, wh_today);
+        } else {
+            dashboard_ui_set_solar(0, 0);   // hold zeros so stale data can't masquerade
+        }
+        esp_lv_adapter_unlock();
+        if (millis() - tw > 100) {
+            Serial.printf("[data] ui lock slow: %lu ms\n", (unsigned long)(millis() - tw));
+        }
+    } else {
+        Serial.printf("[data] ui lock TIMEOUT after %lu ms - UI update skipped\n",
+                      (unsigned long)(millis() - tw));
+    }
+    schedule_next_poll();
+}
+
 static int fetch_open_prs(uint32_t *out_count)
 {
     NetworkClientSecure tls;
     tls.useBuiltinCACertBundle();          // validated TLS, no certs to babysit
+    tls.setHandshakeTimeout(20);           // cap TLS handshake — an 8 s HTTP timeout doesn't cover it
 
     HTTPClient http;
     char url[192];
     snprintf(url, sizeof(url),
              "https://api.github.com/search/issues?q=repo:%s+type:pr+state:open&per_page=1",
              GITHUB_REPO);
+
+    /* diagnostics: DNS step separately, so a failure can't hide here */
+    uint32_t t_dns = millis();
+    IPAddress ip;
+    if (!WiFi.hostByName("api.github.com", ip)) {
+        Serial.printf("[data] DNS FAIL api.github.com (t=%lu ms)\n", (unsigned long)(millis() - t_dns));
+        return -3;
+    }
+    Serial.printf("[data] dns api.github.com -> %s (%lu ms)\n",
+                  ip.toString().c_str(), (unsigned long)(millis() - t_dns));
+
+    uint32_t t_heap = ESP.getFreeHeap();
+
+    /* connect TLS ourselves (explicit diagnostics) — HTTPClient reuses an
+       already-connected socket. Also caps failure time far below the ~55 s
+       hang HTTPClient's timeout does not cover. */
+    uint32_t t_tls = millis();
+    if (!tls.connect("api.github.com", 443)) {
+        char tls_msg[128] = {0};
+        tls.lastError(tls_msg, sizeof(tls_msg));
+        Serial.printf("[data] tls connect FAIL dt=%lu ms heap=%u err=[%s]\n",
+                      (unsigned long)(millis() - t_tls), (unsigned)ESP.getFreeHeap(), tls_msg);
+        return -1;
+    }
+    Serial.printf("[data] tls connect OK dt=%lu ms heap %u->%u\n",
+                  (unsigned long)(millis() - t_tls),
+                  (unsigned)t_heap, (unsigned)ESP.getFreeHeap());
 
     if (!http.begin(tls, url)) {
         return -1;
@@ -95,9 +280,15 @@ static int fetch_open_prs(uint32_t *out_count)
         http.addHeader("X-GitHub-Api-Version", "2022-11-28");
     }
 
+    uint32_t t_get = millis();
     int code = http.GET();
+    uint32_t dt = millis() - t_get;
     if (code != 200) {
-        Serial.printf("[data] GitHub HTTP error %d (%s)\n", code, http.errorToString(code).c_str());
+        char tls_msg[128] = {0};
+        tls.lastError(tls_msg, sizeof(tls_msg));
+        Serial.printf("[data] GitHub HTTP error %d (%s) dt=%lu ms heap %u->%u tls=[%s]\n",
+                      code, http.errorToString(code).c_str(), (unsigned long)dt,
+                      (unsigned)t_heap, (unsigned)ESP.getFreeHeap(), tls_msg);
         http.end();
         return code < 0 ? -1 : code;
     }
@@ -105,6 +296,9 @@ static int fetch_open_prs(uint32_t *out_count)
     /* GitHub search responses can be tens of KB; filter to what we need */
     String payload = http.getString();
     http.end();
+    Serial.printf("[data] GitHub 200, %u B, %lu ms, heap %u->%u\n",
+                  (unsigned)payload.length(), (unsigned long)dt,
+                  (unsigned)t_heap, (unsigned)ESP.getFreeHeap());
 
     JsonDocument filter;
     filter["total_count"] = true;
@@ -140,7 +334,161 @@ static void push_pr_count(void)
     }
 }
 
+/* ---------- diagnostics: generic TLS probe ---------- */
+void dashboard_data_probe(const char *spec)
+{
+    Serial.printf("[probe] rssi=%d dBm\n", WiFi.RSSI());
+    if (strcmp(spec, "RSSI") == 0) return;
+    char buf[128];
+    snprintf(buf, sizeof(buf), "%s", spec);
+    char *host = buf;
+    uint16_t port = 443;
+    bool raw = false;
+    bool big = false;
+    if (strncmp(host, "RAW:", 4) == 0) { raw = true; host += 4; }
+    if (strncmp(host, "BIG:", 4) == 0) { big = true; host += 4; }
+    char *colon = strchr(host, ':');
+    if (colon) { *colon = '\0'; port = (uint16_t)atoi(colon + 1); }
+
+    uint32_t t0 = millis();
+    IPAddress ip;
+    if (!WiFi.hostByName(host, ip)) {
+        Serial.printf("[probe] DNS FAIL %s\n", host);
+        return;
+    }
+    Serial.printf("[probe] %s -> %s (dns %lu ms)\n", host, ip.toString().c_str(),
+                  (unsigned long)(millis() - t0));
+
+    /* BIG mode: connect to host:port, send a ~1.2 KB request, watch for a
+       response. Tests whether LARGER outbound frames make it (TLS ClientHellos
+       are ~200-400 B; everything that worked so far was < 50 B). */
+    if (big) {
+        NetworkClient tcp;
+        t0 = millis();
+        bool ok = tcp.connect(host, port);
+        Serial.printf("[probe-big] tcp connect %s dt=%lu ms\n", ok ? "OK" : "FAIL",
+                      (unsigned long)(millis() - t0));
+        if (ok) {
+            String req = String("GET / HTTP/1.1\r\nHost: ") + host +
+                         "\r\nUser-Agent: ";
+            while (req.length() < 1100) req += 'x';
+            req += "\r\nAccept: */*\r\n\r\n";
+            t0 = millis();
+            size_t sent = tcp.write((const uint8_t *)req.c_str(), req.length());
+            Serial.printf("[probe-big] sent %u/%u B in %lu ms\n",
+                          (unsigned)sent, (unsigned)req.length(), (unsigned long)(millis() - t0));
+            for (int i = 0; i < 12; i++) {
+                delay(2000);
+                Serial.printf("[probe-big] t+%ds: connected=%d available=%d\n",
+                              (i + 1) * 2, (int)tcp.connected(), (int)tcp.available());
+                if (tcp.available() > 0) {
+                    int n = tcp.read((uint8_t *)buf, 64);
+                    Serial.printf("[probe-big] first %d bytes: ", n);
+                    for (int k = 0; k < n && k < 32; k++) {
+                        if (buf[k] >= 32 && buf[k] < 127) Serial.write(buf[k]); else Serial.write('.');
+                    }
+                    Serial.println();
+                    break;
+                }
+                if (!tcp.connected()) { Serial.println("[probe-big] killed before any response"); break; }
+            }
+            tcp.stop();
+        }
+        return;
+    }
+
+    /* RAW mode: plain TCP to an arbitrary port; send a valid minimal TLS
+       record prefix (ClientHello start) and report the peer's reaction.
+       Discriminates: 443-connect-blocked vs TLS-payload-killed. */
+    if (raw) {
+        NetworkClient tcp;
+        t0 = millis();
+        bool ok = tcp.connect(host, port);
+        Serial.printf("[probe-raw] tcp connect %s dt=%lu ms\n", ok ? "OK" : "FAIL",
+                      (unsigned long)(millis() - t0));
+        if (ok) {
+            const uint8_t chello_prefix[] = {
+                0x16, 0x03, 0x01, 0x00, 0x2c,   // TLS record: handshake, vers 3.1, len 44
+                0x01, 0x00, 0x00, 0x28,          // ClientHello, len 40
+                0x03, 0x03,                      // client_version 3.3
+                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+                0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+                0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+                0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,       // random (31 bytes ok)
+                0x00                                             // session id len 0
+            };
+            tcp.write(chello_prefix, sizeof(chello_prefix));
+            /* poll connection state over time: a real FIN/RST flips
+               connected() false; benign silence keeps it open (read()
+               alone is non-blocking and cannot distinguish these) */
+            for (int i = 0; i < 12; i++) {
+                delay(5000);
+                Serial.printf("[probe-raw] t+%ds: connected=%d available=%d\n",
+                              (i + 1) * 5, (int)tcp.connected(), (int)tcp.available());
+            }
+            int n = tcp.available();
+            if (n > 0) {
+                n = tcp.read((uint8_t *)buf, 64);
+                Serial.printf("[probe-raw] peer sent %d bytes: ", n);
+                for (int i = 0; i < n && i < 8; i++) Serial.printf("%02x ", (uint8_t)buf[i]);
+                Serial.println();
+            }
+            tcp.stop();
+        }
+        return;
+    }
+
+    if (port == 80) {
+        NetworkClient tcp;
+        t0 = millis();
+        bool ok = tcp.connect(host, port);
+        Serial.printf("[probe-tcp] connect %s dt=%lu ms\n", ok ? "OK" : "FAIL",
+                      (unsigned long)(millis() - t0));
+        if (ok) {
+            tcp.print(String("HEAD / HTTP/1.1\r\nHost: ") + host + "\r\nConnection: close\r\n\r\n");
+            t0 = millis();
+            String resp = tcp.readStringUntil('\n');
+            Serial.printf("[probe-tcp] first line: %s (dt=%lu ms)\n", resp.c_str(),
+                          (unsigned long)(millis() - t0));
+            tcp.stop();
+        }
+        return;
+    }
+
+    NetworkClientSecure tls;
+    tls.useBuiltinCACertBundle();
+    tls.setHandshakeTimeout(20);           // don't let a bad handshake drag 55 s
+    tls.setTimeout(20000);
+    t0 = millis();
+    bool ok = tls.connect(host, port);
+    Serial.printf("[probe] tls %s dt=%lu ms err=[%s]\n", ok ? "OK" : "FAIL",
+                  (unsigned long)(millis() - t0),
+                  [&]() { static char e[128]; e[0] = 0; tls.lastError(e, sizeof(e)); return e; }());
+    if (ok) {
+        // sanity: send a bare HTTP HEAD so we know the session is truly usable
+        String req = String("HEAD / HTTP/1.1\r\nHost: ") + host + "\r\nConnection: close\r\n\r\n";
+        tls.print(req);
+        t0 = millis();
+        String resp = tls.readStringUntil('\n');
+        Serial.printf("[probe] first line: %s (dt=%lu ms)\n", resp.c_str(),
+                      (unsigned long)(millis() - t0));
+    }
+    tls.stop();
+}
+
 /* ---------- public API ---------- */
+void dashboard_data_fetch_now(void)
+{
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[fetch] not connected");
+        return;
+    }
+    Serial.printf("[fetch] now, heap=%u\n", (unsigned)ESP.getFreeHeap());
+    uint32_t t0 = millis();
+    push_solar();
+    Serial.printf("[fetch] done total_ms=%lu\n", (unsigned long)(millis() - t0));
+}
+
 void dashboard_data_init(void)
 {
     if (strlen(WIFI_SSID) == 0 || strlen(WIFI_PASS) == 0) {
@@ -149,15 +497,27 @@ void dashboard_data_init(void)
         return;
     }
 
+    /* Mute chatty radio-driver logs (our own [data] prints are unaffected;
+       these tags only gate ESP_LOGx from the WiFi/PHY stack) */
+    esp_log_level_set("wifi", ESP_LOG_NONE);
+    esp_log_level_set("wifi_init", ESP_LOG_NONE);
+    esp_log_level_set("phy", ESP_LOG_NONE);
+
     WiFi.mode(WIFI_STA);                   // station only; this board has no AP role
     WiFi.setAutoReconnect(false);          // driver-level retry starves the panel path;
                                            // we schedule reconnects with backoff instead
-    WiFi.setSleep(true);                   // modem sleep between transactions
+    WiFi.setSleep(false);                  // E4: modem power-save off (see radio_up_and_connect)
 
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
         Serial.printf("[data] WiFi connected, IP: %s\n",
                       WiFi.localIP().toString().c_str());
     }, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
+
+    /* SNTP CONFIRMED as the once-per-boot loop wedge: its first DNS+query
+       burst after connect froze loop() 24-40 s (every build with SNTP;
+       clean in every build without — 2026-11-15 session, NOTES.md).
+       The wall clock now syncs from the relay's epoch field instead
+       (see fetch_solar_relay); the serial TIME command stays as fallback. */
 
     printf("[data] connecting to WiFi network \"%s\"...\n", WIFI_SSID);
     radio_up_and_connect();
@@ -170,9 +530,9 @@ void dashboard_data_tick(void)
     switch (state) {
     case WIFI_CONNECTING:
         if (WiFi.status() == WL_CONNECTED) {
-            Serial.printf("[data] WiFi ready\n");
+            Serial.printf("[data] WiFi ready t=%lu\n", (unsigned long)millis());
             wifi_fail_count = 0;
-            push_pr_count();               // first fetch immediately
+            push_solar();               // first fetch immediately
             enter_state(IDLE);
         } else if (millis() - state_since_ms > WIFI_CONNECT_TIMEOUT_MS) {
             wifi_fail_count++;
@@ -194,7 +554,14 @@ void dashboard_data_tick(void)
         break;
 
     case IDLE:
-        if (WiFi.status() != WL_CONNECTED) {
+        {
+        uint32_t t_st = millis();
+        wl_status_t st = WiFi.status();
+        if (millis() - t_st > 100) {
+            Serial.printf("[data] WiFi.status() SLOW: %lu ms\n",
+                          (unsigned long)(millis() - t_st));
+        }
+        if (st != WL_CONNECTED) {
             // dropped link: fresh attempt; if it stays down, CONNECTING's
             // timeout applies backoff
             WiFi.disconnect();
@@ -202,8 +569,15 @@ void dashboard_data_tick(void)
             break;
         }
         if (millis() - last_poll_ms > DATA_POLL_INTERVAL_MS) {
-            push_pr_count();
-            schedule_next_poll();
+            Serial.printf("[data] poll start t=%lu\n", (unsigned long)millis());
+            push_solar();
+            Serial.printf("[data] poll end t=%lu\n", (unsigned long)millis());
+        }
+        static uint32_t last_idle_log = 0;
+        if (millis() - last_idle_log > 10000) {
+            last_idle_log = millis();
+            Serial.printf("[data] idle connected t=%lu\n", (unsigned long)millis());
+        }
         }
         break;
 

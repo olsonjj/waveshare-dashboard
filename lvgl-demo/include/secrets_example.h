@@ -16,3 +16,13 @@
 // Create one: GitHub → Settings → Developer settings → Personal access tokens.
 #define GITHUB_REPO  "olsonjj/waveshare-dashboard"
 #define GITHUB_TOKEN ""   // e.g. "github_pat_xxxxxxxxxxxx"
+
+// Enphase IQ Gateway (direct fetch path — fallback/diagnostic; the scheduled
+// poll goes through the LAN relay below). Host = gateway IP; token lives 1 year.
+#define ENVOY_HOST  ""   // e.g. "192.168.182.102"
+#define ENVOY_TOKEN ""
+
+// LAN relay (relay/solar_relay.py): sub-second solar poll + wall-clock epoch.
+// RELAY_KEY must match the relay's RELAY_KEY (env var or default).
+#define RELAY_URL   ""   // e.g. "http://192.168.182.147:8420/solar"
+#define RELAY_KEY   ""

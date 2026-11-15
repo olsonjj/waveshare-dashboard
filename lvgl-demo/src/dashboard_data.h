@@ -23,6 +23,12 @@ void dashboard_data_init(void);
 /** Pump the poller state machine. Call from loop() as often as possible. */
 void dashboard_data_tick(void);
 
+/** Run one fetch immediately (serial "FETCH" command — diagnostics). */
+void dashboard_data_fetch_now(void);
+
+/** Probe TLS connect to host:port (serial "PROBE host[:port]" — diagnostics). */
+void dashboard_data_probe(const char *spec);
+
 /** Data polling interval between successful fetches. */
 #define DATA_POLL_INTERVAL_MS (60UL * 1000UL)
 

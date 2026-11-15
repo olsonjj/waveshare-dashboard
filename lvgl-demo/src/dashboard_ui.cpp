@@ -251,6 +251,8 @@ static lv_obj_t *make_dot(lv_obj_t *parent, int d, lv_color_t fill,
 /* ------------------------------------------------------------------ */
 static lv_obj_t *tab_btn[2];
 static lv_obj_t *tab_underline[2];
+static lv_obj_t *s_power_val_lbl = nullptr;   /* CURRENT POWER card value (kW) */
+static lv_obj_t *s_yield_val_lbl = nullptr;   /* TOTAL YIELD card value (kWh) */
 static lv_obj_t *tab_title[2];
 static lv_obj_t *panel_solar, *panel_github;
 static lv_obj_t *clock_label;
@@ -463,6 +465,7 @@ static void build_power_card(lv_obj_t *parent)
     lv_obj_align_to(pill, title_lbl, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
 
     lv_obj_t *val = make_label(card, "3.84", FONT_HERO, color_power(), 20, 36);
+    s_power_val_lbl = val;
     lv_obj_t *unit = make_label(card, "kW", FONT_TITLE, text_dim(), 0, 0);
     lv_obj_align_to(unit, val, LV_ALIGN_OUT_RIGHT_BOTTOM, 8, -14);
 
@@ -518,6 +521,7 @@ static void build_yield_card(lv_obj_t *parent)
     lv_obj_align(gain, LV_ALIGN_TOP_RIGHT, -14, 8);
 
     lv_obj_t *val = make_label(card, "21.65", FONT_HERO, text(), 20, 36);
+    s_yield_val_lbl = val;
     lv_obj_t *unit = make_label(card, "kWh", FONT_TITLE, color_yield(), 0, 0);
     lv_obj_align_to(unit, val, LV_ALIGN_OUT_RIGHT_BOTTOM, 8, -14);
 
@@ -758,4 +762,13 @@ void dashboard_ui_set_pr_count(uint32_t count, const char *note)
 {
     (void)count;
     (void)note;
+}
+
+void dashboard_ui_set_solar(uint32_t watts_now, uint32_t wh_today)
+{
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.2f", watts_now / 1000.0);
+    lv_label_set_text(s_power_val_lbl, buf);
+    snprintf(buf, sizeof(buf), "%.2f", wh_today / 1000.0);
+    lv_label_set_text(s_yield_val_lbl, buf);
 }

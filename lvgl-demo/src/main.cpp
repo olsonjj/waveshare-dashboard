@@ -112,11 +112,20 @@ static void handle_serial_line(const String &line)
             Serial.println("[time] syntax: TIME hh:mm:ss | TIME yyyy-mm-dd hh:mm:ss | TIME ?");
         }
     }
+    if (s == "FETCH") {
+        dashboard_data_fetch_now();
+    }
+    if (s.startsWith("PROBE ")) {
+        dashboard_data_probe(s.c_str() + 6);
+    }
 }
 
 void setup()
 {
-    Serial.begin(115200);
+    /* 4 KB TX ring + 921600 baud: Serial.print() never spin-waits on the
+     128-byte HW FIFO (see NOTES.md serial hardening rationale) */
+    Serial.setTxBufferSize(4096);
+    Serial.begin(921600);
     Serial.println("LVGL v8 demo start");
 
     /* TZ must be set before any localtime()/mktime() use */
