@@ -69,7 +69,11 @@ void setup()
     ESP_ERROR_CHECK(esp_lv_adapter_start());
     Serial.printf("[s4] adapter started\n");
 
+#ifndef DBG1_NO_WIFI
     dashboard_data_init();
+#else
+    Serial.println("[dbg1] data layer disabled (glitch experiment)\n");
+#endif
 
     ESP_ERROR_CHECK(esp_lv_adapter_lock(-1));
     dashboard_ui_init();
@@ -83,7 +87,9 @@ void loop()
 {
     static uint32_t n = 0;
     /* LVGL runs in the adapter's own task; don't touch it from here */
+#ifndef DBG1_NO_WIFI
     dashboard_data_tick();
+#endif
     if ((++n % 50) == 0) {
         Serial.printf("[hb] alive t=%lu ms\n", (unsigned long)millis());
         Serial.flush();

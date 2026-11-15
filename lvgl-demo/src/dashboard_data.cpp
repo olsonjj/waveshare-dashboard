@@ -21,12 +21,44 @@
 #include "dashboard_ui.h"
 
 /* ---------- state ---------- */
-enum DataState { WIFI_CONNECTING, IDLE, FETCHING };
+enum DataState { WIFI_DISABLED, WIFI_CONNECTING, WIFI_BACKOFF, IDLE, FETCHING };
 
 static DataState state = WIFI_CONNECTING;
 static uint32_t state_since_ms = 0;
 static uint32_t last_poll_ms = 0;
 static uint32_t wifi_fail_count = 0;
+static uint32_t next_connect_ms = 0;
+
+static void enter_state(DataState s);
+
+/*
+ * Backoff after failed WiFi attempts. The panel's RGB refresh path lives on
+ * core 0 (see NOTES.md): scan/handshake bursts starve it and show up as screen
+ * noise, so failed attempts must sit with the radio OFF and NOT hammer the
+ * WiFi driver. Cap at 30 minutes; a connected period resets the ladder.
+ */
+static const uint32_t backoff_s[] = {15, 45, 120, 300, 900, 1800};
+static uint32_t backoff_delay(void)
+{
+    uint32_t i = wifi_fail_count > 0 ? wifi_fail_count - 1 : 0;
+    if (i >= sizeof(backoff_s) / sizeof(backoff_s[0]))
+        i = sizeof(backoff_s) / sizeof(backoff_s[0]) - 1;
+    return backoff_s[i] * 1000UL;
+}
+
+static void radio_off(void)
+{
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+}
+
+static void radio_up_and_connect(void)
+{
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(true);
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    enter_state(WIFI_CONNECTING);
+}
 
 static void enter_state(DataState s)
 {
@@ -111,8 +143,15 @@ static void push_pr_count(void)
 /* ---------- public API ---------- */
 void dashboard_data_init(void)
 {
+    if (strlen(WIFI_SSID) == 0 || strlen(WIFI_PASS) == 0) {
+        Serial.println("[data] no WiFi credentials in secrets.h — data layer disabled");
+        enter_state(WIFI_DISABLED);
+        return;
+    }
+
     WiFi.mode(WIFI_STA);                   // station only; this board has no AP role
-    WiFi.setAutoReconnect(true);
+    WiFi.setAutoReconnect(false);          // driver-level retry starves the panel path;
+                                           // we schedule reconnects with backoff instead
     WiFi.setSleep(true);                   // modem sleep between transactions
 
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
@@ -120,18 +159,14 @@ void dashboard_data_init(void)
                       WiFi.localIP().toString().c_str());
     }, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
 
-    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-        Serial.printf("[data] WiFi disconnected (status %d), auto-reconnecting\n",
-                      info.wifi_sta_disconnected.reason);
-    }, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-
     printf("[data] connecting to WiFi network \"%s\"...\n", WIFI_SSID);
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-    enter_state(WIFI_CONNECTING);
+    radio_up_and_connect();
 }
 
 void dashboard_data_tick(void)
 {
+    if (state == WIFI_DISABLED) return;
+
     switch (state) {
     case WIFI_CONNECTING:
         if (WiFi.status() == WL_CONNECTED) {
@@ -141,22 +176,34 @@ void dashboard_data_tick(void)
             enter_state(IDLE);
         } else if (millis() - state_since_ms > WIFI_CONNECT_TIMEOUT_MS) {
             wifi_fail_count++;
-            Serial.printf("[data] WiFi connect attempt %lu failed (%s), retrying in 10 s\n",
-                          (unsigned long)wifi_fail_count, WiFi.status() == WL_NO_SSID_AVAIL ?
-                          "SSID not found" : "timeout");
-            WiFi.disconnect();
-            WiFi.begin(WIFI_SSID, WIFI_PASS);
-            enter_state(WIFI_CONNECTING);  // restart the timer as well
-            delay(10 * 1000);              // grace period; blocks loop(), UI unaffected
+            uint32_t wait = backoff_delay();
+            Serial.printf("[data] WiFi connect attempt %lu failed — retry in %lu s\n",
+                          (unsigned long)wifi_fail_count, (unsigned long)(wait / 1000));
+            radio_off();                   // panel path regains core 0 while we wait
+            next_connect_ms = millis() + wait;
+            state = WIFI_BACKOFF;
+            state_since_ms = millis();
+        }
+        break;
+
+    case WIFI_BACKOFF:
+        if ((int32_t)(millis() - next_connect_ms) >= 0) {
+            printf("[data] retrying WiFi...\n");
+            radio_up_and_connect();
         }
         break;
 
     case IDLE:
+        if (WiFi.status() != WL_CONNECTED) {
+            // dropped link: fresh attempt; if it stays down, CONNECTING's
+            // timeout applies backoff
+            WiFi.disconnect();
+            radio_up_and_connect();
+            break;
+        }
         if (millis() - last_poll_ms > DATA_POLL_INTERVAL_MS) {
-            if (WiFi.status() == WL_CONNECTED) {
-                push_pr_count();
-                schedule_next_poll();
-            }
+            push_pr_count();
+            schedule_next_poll();
         }
         break;
 

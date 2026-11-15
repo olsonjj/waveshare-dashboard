@@ -164,6 +164,26 @@ Mockup-faithful two-tab dashboard built in `src/dashboard_ui.cpp` (tokens in `sr
 6. `LV_MEM_SIZE` raised 48 KB → **128 KB** in both `lib/lv_conf.h` and `include/lv_conf.h` (still
    in sync, see gotcha 3 in the section above). RAM now 56% (183 KB of 320 KB).
 
+### Glitch diagnosis (2025-11-14, after v2 flash)
+
+**Symptom** (user photo): horizontal streak/ghost rows flickering across the panel — classic RGB
+row-phase/tearing.
+
+**Root cause**: `dashboard_data.cpp` failed WiFi attempts and **retried continuously** (driver
+`setAutoReconnect(true)` + `WiFi.begin` every 20 s + 10 s blocking delay): scan/handshake bursts starve
+the RGB refresh path (core 0, see gotcha list above) while the v2 UI also pushes a 254 KB PSRAM canvas
+blit through the same fabric → visible row noise.
+
+**How it was found**: host simulator verified the LVGL layout was pixel-perfect (artifacts only on
+device) → one-variable experiments (HITL): E1 = build with the data layer compiled out
+(`-DDBG1_NO_WIFI`, guard kept in main.cpp) → **noise gone** (user-confirmed) → cause = data layer.
+
+**Fix**: `dashboard_data.cpp` rewritten state machine: `WIFI_DISABLED` (no credentials in secrets.h →
+never touched), `WIFI_CONNECTING` (one 20 s attempt), then `WIFI_BACKOFF` ladder 15 s → 45 s → 2 m →
+5 m → 15 m → 30 min with **radio OFF** between attempts (`WiFi.mode(WIFI_OFF)`, driver auto-reconnect
+disabled — we own the cadence). Blocking `delay()` removed; heartbeats print again. Verified on serial:
+attempt → "retry in 15 s" → quiet.
+
 ### Host simulator (`hostsim/`) — *self-review without hardware*
 
 `hostsim/build.sh snap` compiles the SAME `src/dashboard_ui.cpp` against macOS SDL2 + the vendored
