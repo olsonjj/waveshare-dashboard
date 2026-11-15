@@ -340,16 +340,9 @@ static void hist_migrate_legacy(void)
     snap.last_ts   = 0;
     strlcpy(snap.date, date.c_str(), sizeof(snap.date));
 
-    /* the legacy keys are the only copy of this data — do not delete them
-     * unless the snap blob is confirmed written (NVS may be full) */
-    size_t written = s_hist.putBytes("snap", &snap, sizeof(snap));
-    if (written != sizeof(snap)) {
-        Serial.printf("[data] hourly history: snapshot save FAILED (%u/%u B) - legacy keys kept\n",
-                      (unsigned)written, (unsigned)sizeof(snap));
-        return;                            /* fresh start in memory; retry next boot */
-    }
-
-    /* adopt locally exactly like a loaded snapshot */
+    /* adopt locally exactly like a loaded snapshot — the data was read
+     * successfully, so the running display keeps it REGARDLESS of whether
+     * the converted blob could be written back */
     memcpy(s_hist_kwh, snap.kwh, sizeof(s_hist_kwh));
     memcpy(s_hist_wh_start, snap.wh_start, sizeof(s_hist_wh_start));
     s_hist_last_wh   = snap.last_wh;
@@ -357,6 +350,17 @@ static void hist_migrate_legacy(void)
     s_hist_last_ts   = snap.last_ts;
     memcpy(s_hist_date, snap.date, sizeof(s_hist_date));
     s_hist_date[sizeof(s_hist_date) - 1] = '\0';
+
+    /* the legacy keys are the only PERSISTED copy of this data — do not
+     * delete them unless the snap blob is confirmed written (NVS may be
+     * full). On a failed write the in-memory state above is still correct
+     * and the next boot re-reads the legacy keys and retries. */
+    size_t written = s_hist.putBytes("snap", &snap, sizeof(snap));
+    if (written != sizeof(snap)) {
+        Serial.printf("[data] hourly history: snapshot save FAILED (%u/%u B) - legacy keys kept\n",
+                      (unsigned)written, (unsigned)sizeof(snap));
+        return;
+    }
 
     s_hist.remove("date");
     s_hist.remove("kwh");
