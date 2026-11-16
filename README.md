@@ -18,6 +18,11 @@ host required.**
                                                                     per fetch)
 ```
 
+![Dashboard screenshot](docs/screenshot.png)
+
+*Rendered by the host simulator (`firmware/hostsim/`) — the same
+`dashboard_ui.cpp` the board runs, with a canned mid-afternoon sample.*
+
 The board polls the Envoy itself over TLS every 5 minutes and keeps the
 hourly bar graph in NVS, so nothing else needs to be running for the panel
 to work. An earlier iteration routed data through a relay host (the Envoy's
