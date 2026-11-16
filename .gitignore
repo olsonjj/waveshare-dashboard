@@ -33,3 +33,4 @@ __pycache__/
 
 # generated build stamp (pre_build_stamp.py)
 firmware/include/build_stamp.h
+.vscode/
