@@ -14,6 +14,20 @@
 
 #include "dashboard_ui.h"
 
+/* Pin the wall clock for screenshot renders: a README screenshot must
+ * be internally consistent (now-line inside the current bar, header clock
+ * matching the data), regardless of when the sim runs. Interposing
+ * libc time() for the whole executable does that; the fixed epoch is
+ * 2026-11-15 14:35:00 PST (1794782100). Sim-only; the firmware binary
+ * is untouched by this file. extern "C" is required: without it the
+ * definition name-mangles and dashboard_ui.o binds to libc's time. */
+extern "C" time_t time(time_t *t)
+{
+    time_t fixed = 1794782100;
+    if (t) *t = fixed;
+    return fixed;
+}
+
 static SDL_Window *window;
 static SDL_Renderer *renderer;
 static SDL_Texture *texture;
@@ -137,6 +151,20 @@ int main(int argc, char **argv)
 
     /* run the UI */
     dashboard_ui_init();
+
+    /* canned mid-afternoon sample so screenshots show a POPULATED
+     * dashboard (plausible values, not real): full buckets 6..13,
+     * partial current hour 14, totals consistent with the bars */
+    {
+        float kwh[24];
+        for (int i = 0; i < 24; i++) kwh[i] = -1.0f;   /* -1 = missing */
+        static const float afternoon[9] = { 0.2f, 0.9f, 1.6f, 2.2f, 2.6f,
+                                           2.9f, 2.8f, 1.6f, 0.9f };
+        for (int i = 0; i < 9; i++) kwh[6 + i] = afternoon[i];
+        dashboard_ui_set_hourly(kwh);
+        dashboard_ui_set_solar(2400, 15700, 4900, 138500, "02:35 PM");
+    }
+
     pump_frames(40);
 
     if (argc > 1) dump_tree(lv_scr_act(), 0);
