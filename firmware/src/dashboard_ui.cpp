@@ -684,9 +684,11 @@ void dashboard_ui_set_solar(uint32_t watts_now, uint32_t wh_today,
                              uint32_t watts_peak, uint32_t wh_7day,
                              const char *updated)
 {
-    /* 24+: "7 Day Yield 142.73 kWh" is 22 chars + NUL (the old buf[20]
-     * clipped the unit off the end after the first real poll) */
-    char buf[24];
+    /* 32 covers the longest possible string over the full uint32 range:
+     * "7 Day Yield 4294967.29 kWh" (27) — exact-fit buffers clipped the
+     * unit before (buf[20] with "7 Day Yield 142.73 kWh"), so this is a
+     * class-kill, not another exact fit */
+    char buf[32];
     snprintf(buf, sizeof(buf), "%.2f", watts_now / 1000.0);
     lv_label_set_text(s_power_val_lbl, buf);
     snprintf(buf, sizeof(buf), "%.2f", wh_today / 1000.0);
