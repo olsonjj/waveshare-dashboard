@@ -82,8 +82,10 @@ is the manual fallback.
       snapshot with migrations for prior formats)
 - [x] Wall clock: TZ-correct, build-stamp-seeded (SNTP wedges the loop —
       see NOTES)
-- [ ] Bucket-logic test harness (host-side unit tests for
-      hist_load/hist_apply/migrations)
+- [x] Host-side unit tests (`pio test -e native`, 22 cases in <1 s):
+      hourly buckets + migrations (solar_hist) and wall clock + DST +
+      seed policy (wall_clock) — every logic path that can silently corrupt
+      the persisted history is pinned
 - [ ] GitHub "Web Stats" tab (blocked on WAN TLS filtering from the board)
 
 See [docs/NOTES.md](docs/NOTES.md) for the full record: board gotchas (CAN-muxed
