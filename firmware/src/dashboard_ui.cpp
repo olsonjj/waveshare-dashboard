@@ -239,6 +239,22 @@ static constexpr int N_YLBL    = 5;                   /* 0..ymax, 4 intervals */
 
 static lv_obj_t *s_hour_bar[N_HOURS];       /* bottom-anchored bar objects */
 static lv_obj_t *s_y_lbl[N_YLBL];           /* y-axis labels (text only)  */
+static lv_obj_t *s_now_line;               /* current-time marker (2 px) */
+
+/* Position the current-time line: x = fraction of the day elapsed,
+ * floored to the most recent 15-minute mark that has passed. Called
+ * from a 60-s lv_timer and once at chart build. */
+static void update_now_line(void)
+{
+    if (!s_now_line) return;
+    time_t now = time(nullptr);
+    struct tm tmbuf;
+    localtime_r(&now, &tmbuf);
+    int mins = tmbuf.tm_hour * 60 + tmbuf.tm_min;
+    mins = mins / 15 * 15;                    /* floor to passed 15-min mark */
+    int x = PAD_L + mins * PLOT_W / (24 * 60);
+    lv_obj_set_pos(s_now_line, x, PAD_T);
+}
 
 /* ------------------------------------------------------------------ */
 /* tabs                                                                */
@@ -496,6 +512,19 @@ static void build_chart_card(lv_obj_t *parent)
     lv_obj_set_style_border_width(base, 0, 0);
     lv_obj_clear_flag(base, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
+    /* current-time marker: thin full-height line, positioned by the
+     * 60-s now-timer; green reads as "live" against amber bars */
+    s_now_line = lv_obj_create(plot);
+    lv_obj_set_size(s_now_line, 2, PLOT_H);
+    lv_obj_set_pos(s_now_line, PAD_L, PAD_T);
+    lv_obj_set_style_pad_all(s_now_line, 0, 0);
+    lv_obj_set_style_bg_color(s_now_line, green(), 0);
+    lv_obj_set_style_bg_opa(s_now_line, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(s_now_line, 0, 0);
+    lv_obj_set_style_border_width(s_now_line, 0, 0);
+    lv_obj_clear_flag(s_now_line, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    update_now_line();
+
     /* one bar per hour, bottom-anchored; heights set by set_hourly */
     for (int i = 0; i < N_HOURS; i++) {
         lv_obj_t *b = lv_obj_create(plot);
@@ -591,6 +620,8 @@ static void clock_timer_cb(lv_timer_t *)
     lv_label_set_text(clock_label, buf);
 }
 
+static void now_timer_cb(lv_timer_t *) { update_now_line(); }
+
 void dashboard_ui_init(void)
 {
     lv_obj_t *scr = lv_scr_act();
@@ -625,6 +656,7 @@ void dashboard_ui_init(void)
 
     select_tab(0);
     lv_timer_create(clock_timer_cb, 1000, NULL);
+    lv_timer_create(now_timer_cb, 60000, NULL);
 }
 
 /* switch tabs programmatically (used by the host simulator; harmless on HW) */
