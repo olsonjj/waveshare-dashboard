@@ -18,11 +18,13 @@ void dashboard_ui_select_tab(int idx);
 void dashboard_ui_set_pr_count(uint32_t count, const char *note);
 
 /** Update the Solar tab: current power (W), energy produced today (Wh),
- *  today's peak power (W), and a wall-clock string for the last-updated
- *  pill ("--:--" when data is unavailable). Must be called with the LVGL
- *  adapter lock held (same contract as dashboard_ui_set_pr_count). */
+ *  today's peak power (W), energy over the trailing 7 days (Wh), and a
+ *  wall-clock string for the last-updated pill ("--:--" when data is
+ *  unavailable). Must be called with the LVGL adapter lock held (same
+ *  contract as dashboard_ui_set_pr_count). */
 void dashboard_ui_set_solar(uint32_t watts_now, uint32_t wh_today,
-                             uint32_t watts_peak, const char *updated);
+                             uint32_t watts_peak, uint32_t wh_7day,
+                             const char *updated);
 
 /** Update the 24-hour generation bar chart: one bar per hour, kWh for
  *  that hour, index 0 = 12:00 AM. Negative entries render no bar

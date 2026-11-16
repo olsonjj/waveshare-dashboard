@@ -215,6 +215,7 @@ static lv_obj_t *s_power_val_lbl = nullptr;   /* CURRENT POWER card value (kW) *
 static lv_obj_t *s_power_peak_lbl = nullptr;  /* CURRENT POWER card peak row (kW) */
 static lv_obj_t *s_power_unit_lbl = nullptr;  /* kW unit; re-aligned each update */
 static lv_obj_t *s_yield_val_lbl = nullptr;   /* TOTAL YIELD card value (kWh) */
+static lv_obj_t *s_yield_7d_lbl = nullptr;    /* 7 Day Yield bottom stat (kWh) */
 static lv_obj_t *s_yield_unit_lbl = nullptr;  /* kWh unit; re-aligned each update */
 static lv_obj_t *s_power_upd_lbl = nullptr;  /* last-updated pill label */
 
@@ -467,6 +468,13 @@ static void build_yield_card(lv_obj_t *parent)
     lv_obj_t *unit = make_label(card, "kWh", FONT_TITLE, color_yield(), 0, 0);
     lv_obj_align_to(unit, val, LV_ALIGN_OUT_RIGHT_BOTTOM, 12, -14);
     s_yield_unit_lbl = unit;
+
+    /* bottom stat, mirroring the power card's Peak row */
+    lv_obj_t *tri = make_tri(card, green(), 10, 8);
+    lv_obj_align(tri, LV_ALIGN_BOTTOM_LEFT, 20, -12);
+    lv_obj_t *seven = make_label(card, "7 Day Yield --.-- kWh", FONT_BODY, green(), 0, 0);
+    s_yield_7d_lbl = seven;
+    lv_obj_align_to(seven, tri, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
 }
 
 /* Default chart grid before the first data arrives (also what set_hourly
@@ -673,15 +681,22 @@ void dashboard_ui_set_pr_count(uint32_t count, const char *note)
 }
 
 void dashboard_ui_set_solar(uint32_t watts_now, uint32_t wh_today,
-                             uint32_t watts_peak, const char *updated)
+                             uint32_t watts_peak, uint32_t wh_7day,
+                             const char *updated)
 {
-    char buf[20];
+    /* 32 covers the longest possible string over the full uint32 range:
+     * "7 Day Yield 4294967.29 kWh" (27) — exact-fit buffers clipped the
+     * unit before (buf[20] with "7 Day Yield 142.73 kWh"), so this is a
+     * class-kill, not another exact fit */
+    char buf[32];
     snprintf(buf, sizeof(buf), "%.2f", watts_now / 1000.0);
     lv_label_set_text(s_power_val_lbl, buf);
     snprintf(buf, sizeof(buf), "%.2f", wh_today / 1000.0);
     lv_label_set_text(s_yield_val_lbl, buf);
     snprintf(buf, sizeof(buf), "Peak %.2f kW", watts_peak / 1000.0);
     lv_label_set_text(s_power_peak_lbl, buf);
+    snprintf(buf, sizeof(buf), "7 Day Yield %.2f kWh", wh_7day / 1000.0);
+    lv_label_set_text(s_yield_7d_lbl, buf);
     char upd[40];
     snprintf(upd, sizeof(upd), "Last updated: %s", updated ? updated : "--:--");
     lv_label_set_text(s_power_upd_lbl, upd);
