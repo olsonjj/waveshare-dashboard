@@ -88,9 +88,13 @@ static const float RELAY_STALE_LIMIT_S = 180.0f;
  * its fast path and serves us a sub-second LAN GET. */
 #if SOLAR_POLL_VIA_RELAY
 static int fetch_solar_relay(uint32_t *watts_now, uint32_t *wh_today,
-                              uint32_t *watts_peak, float hourly_kwh[24])
+                              uint32_t *watts_peak, uint32_t *wh_7day,
+                              float hourly_kwh[24])
 {
     uint32_t t0 = millis();
+    /* the relay JSON does not carry 7-day energy (dormant path; add it
+     * there first if it is ever resurrected) */
+    *wh_7day = 0;
     HTTPClient http;
     if (!http.begin(RELAY_URL)) {
         return -1;
@@ -165,7 +169,7 @@ static int fetch_solar_relay(uint32_t *watts_now, uint32_t *wh_today,
 static NetworkClientSecure s_envoy_tls;
 
 static int fetch_enphase(uint32_t *watts_now, uint32_t *wh_today,
-                         uint32_t *watts_peak)
+                         uint32_t *watts_peak, uint32_t *wh_7day)
 {
     uint32_t t0 = millis();
     if (!s_envoy_tls.connected()) {
@@ -216,6 +220,7 @@ static int fetch_enphase(uint32_t *watts_now, uint32_t *wh_today,
     JsonDocument filter;
     filter["production"]["pcu"]["wattsNow"] = true;
     filter["production"]["pcu"]["wattHoursToday"] = true;
+    filter["production"]["pcu"]["wattHoursSevenDays"] = true;
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, payload,
         DeserializationOption::Filter(filter));
@@ -225,6 +230,7 @@ static int fetch_enphase(uint32_t *watts_now, uint32_t *wh_today,
     }
     *watts_now = doc["production"]["pcu"]["wattsNow"] | 0u;
     *wh_today   = doc["production"]["pcu"]["wattHoursToday"] | 0u;
+    *wh_7day    = doc["production"]["pcu"]["wattHoursSevenDays"] | 0u;
     uint32_t t_peak = millis();
 
     /* second endpoint on the same TLS session: per-micro daily maxes ->
@@ -256,9 +262,9 @@ static int fetch_enphase(uint32_t *watts_now, uint32_t *wh_today,
         }
     }
 
-    Serial.printf("[data] envoy: %lu W, %lu Wh today, %lu W peak (get %lu ms, body %lu ms, inverters %lu ms, %u B)\n",
+    Serial.printf("[data] envoy: %lu W, %lu Wh today, %lu W peak, %lu Wh 7d (get %lu ms, body %lu ms, inverters %lu ms, %u B)\n",
                   (unsigned long)*watts_now, (unsigned long)*wh_today,
-                  (unsigned long)*watts_peak,
+                  (unsigned long)*watts_peak, (unsigned long)*wh_7day,
                   (unsigned long)(t_hdr - t0), (unsigned long)(t_body - t_hdr),
                   (unsigned long)(millis() - t_peak), (unsigned)payload.length());
     return 0;
@@ -315,13 +321,14 @@ static void serial_log_wrapper(const char* line)
 
 static void push_solar(void)
 {
-    uint32_t watts_now = 0, wh_today = 0, watts_peak = 0;
+    uint32_t watts_now = 0, wh_today = 0, watts_peak = 0, wh_7day = 0;
     float hourly[24];
     for (int i = 0; i < 24; i++) hourly[i] = -1.0f;   /* -1 = hour missing */
 #if SOLAR_POLL_VIA_RELAY
-    int rc = fetch_solar_relay(&watts_now, &wh_today, &watts_peak, hourly);
+    int rc = fetch_solar_relay(&watts_now, &wh_today, &watts_peak, &wh_7day,
+                               hourly);
 #else
-    int rc = fetch_enphase(&watts_now, &wh_today, &watts_peak);
+    int rc = fetch_enphase(&watts_now, &wh_today, &watts_peak, &wh_7day);
     if (rc == 0) {
         solar_hist_apply(wh_today, time(nullptr));
         memcpy(hourly, solar_hist_kwh(), sizeof(hourly));
@@ -339,10 +346,10 @@ static void push_solar(void)
             struct tm tmv;
             localtime_r(&t, &tmv);
             strftime(upd, sizeof(upd), "%I:%M %p", &tmv);
-            dashboard_ui_set_solar(watts_now, wh_today, watts_peak, upd);
+            dashboard_ui_set_solar(watts_now, wh_today, watts_peak, wh_7day, upd);
             dashboard_ui_set_hourly(hourly);
         } else {
-            dashboard_ui_set_solar(0, 0, 0, "--:--");   // zeros: stale data can't masquerade
+            dashboard_ui_set_solar(0, 0, 0, 0, "--:--");   // zeros: stale data can't masquerade
         }
         esp_lv_adapter_unlock();
         if (millis() - tw > 100) {
