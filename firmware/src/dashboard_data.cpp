@@ -158,6 +158,8 @@ static int fetch_solar_relay(uint32_t *watts_now, uint32_t *wh_today,
 }
 #endif /* SOLAR_POLL_VIA_RELAY */
 
+#include <esp_heap_caps.h>
+
 /* Enphase IQ Gateway direct fetch — the scheduled poll path in direct mode.
  * Enphase IQ Gateway (local LAN): GET /ivp/pdm/energy -> production.pcu,
  * then /api/v1/production/inverters on the same TLS session for the peak
@@ -706,7 +708,20 @@ void dashboard_data_tick(void)
             break;
         }
         if (millis() - last_poll_ms > DATA_POLL_INTERVAL_MS) {
-            Serial.printf("[data] poll start t=%lu\n", (unsigned long)millis());
+            /* heap telemetry: watch for state drift over uptime (the panel
+             * corruption episode at ~11 h uptime cleared instantly on reset,
+             * pointing at accumulated runtime state; these numbers make the
+             * hypothesis measurable - see docs/NOTES.md noise saga).
+             * heap_caps is used directly: on this RGB-panel config PSRAM is
+             * not in Arduino's malloc pool, so ESP.getFreePsram() always
+             * reports 0 - only MALLOC_CAP_SPIRAM accounting is real. */
+            Serial.printf("[data] poll start t=%lu heap=%u psram=%u maxblk=%u\n",
+                          (unsigned long)millis(),
+                          (unsigned)heap_caps_get_free_size(
+                              MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
+                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                          (unsigned)heap_caps_get_largest_free_block(
+                              MALLOC_CAP_SPIRAM));
             push_solar();
             Serial.printf("[data] poll end t=%lu\n", (unsigned long)millis());
         }
