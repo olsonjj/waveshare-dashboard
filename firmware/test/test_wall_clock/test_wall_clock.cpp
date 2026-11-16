@@ -223,6 +223,84 @@ void test_stamp_to_epoch_to_seed_decision_roundtrip(void)
     TEST_ASSERT_FALSE(wc_should_seed(build_epoch, build_epoch));
 }
 
+/* ---- RFC 7231 Date header parsing (UTC; NOT the PST/PDT mktime path, so
+ * these expected epochs are absolute UTC even though setUp sets TZ) ---- */
+static const time_t HDR_POISON = (time_t)-77;
+
+/* 9. Valid IMF-fixdate: "Mon, 16 Nov 2026 22:15:41 GMT" -> 1,794,867,341.
+ * Hand arithmetic (UTC, no TZ offset):
+ *   2026-01-01 00:00 UTC = 1,767,225,600 (20454 days: 56 years x 365 +
+ *   14 leap days 1972..2024; the anchor documented above); Nov 16 = day
+ *   304 (Jan..Oct) + 15 = 319 -> + 319*86400 = 1,794,787,200;
+ *   + 22*3600 + 15*60 + 41 = 80,141 -> 1,794,867,341.
+ * (Verified: `date -j -u -f "%a, %d %b %Y %H:%M:%S"
+ *   "Mon, 16 Nov 2026 22:15:41" +%s`; reverse `date -r 1794867341 -u`.) */
+void test_http_date_nov2026(void)
+{
+    time_t epoch = HDR_POISON;
+    TEST_ASSERT_TRUE(wc_parse_http_date("Mon, 16 Nov 2026 22:15:41 GMT",
+                                        &epoch));
+    TEST_ASSERT_EQUAL_INT64(1794867341LL, (long long)epoch);
+}
+
+/* 10. Leap day pins the leap-year arithmetic. "Tue, 29 Feb 2028 12:00:00
+ * GMT" -> 1,835,438,400. Hand arithmetic:
+ *   2028-01-01 = (58*365 + 14) days = 21,184 days = 1,830,297,600;
+ *   + 59*86400 (Jan 31 + Feb 28 to reach Feb 29) = 1,835,395,200;
+ *   + 12*3600 = 43,200 -> 1,835,438,400.
+ * (Verified: date -j -u ... "Tue, 29 Feb 2028 12:00:00" +%s) */
+void test_http_date_leap_day_2028(void)
+{
+    time_t epoch = HDR_POISON;
+    TEST_ASSERT_TRUE(wc_parse_http_date("Tue, 29 Feb 2028 12:00:00 GMT",
+                                        &epoch));
+    TEST_ASSERT_EQUAL_INT64(1835438400LL, (long long)epoch);
+}
+
+/* 11. Out-of-range month name: rejected, *out untouched. */
+void test_http_date_unknown_month_rejected(void)
+{
+    time_t epoch = HDR_POISON;
+
+    TEST_ASSERT_FALSE(wc_parse_http_date("Mon, 16 Xyz 2026 22:15:41 GMT",
+                                         &epoch));  /* unknown month */
+    TEST_ASSERT_EQUAL_INT64((long long)HDR_POISON, (long long)epoch);
+}
+
+/* 12. Seconds field truncated: rejected, *out untouched. */
+void test_http_date_truncated_field_rejected(void)
+{
+    time_t epoch = HDR_POISON;
+
+    TEST_ASSERT_FALSE(wc_parse_http_date("Mon, 16 Nov 2026 22:15 GMT",
+                                         &epoch));  /* truncated field */
+    TEST_ASSERT_EQUAL_INT64((long long)HDR_POISON, (long long)epoch);
+}
+
+/* 13. Missing GMT designator (RFC 7231 mandates GMT): rejected, *out
+ * untouched. */
+void test_http_date_missing_gmt_rejected(void)
+{
+    time_t epoch = HDR_POISON;
+
+    TEST_ASSERT_FALSE(wc_parse_http_date("Mon, 16 Nov 2026 22:15:41",
+                                         &epoch));  /* missing GMT */
+    TEST_ASSERT_EQUAL_INT64((long long)HDR_POISON, (long long)epoch);
+}
+
+/* 14. Sync gate: nudge only when |now - source| > 5 s, either direction
+ * (boundary style mirrors test_should_seed_bounds). */
+void test_should_sync_bounds(void)
+{
+    const time_t now = (time_t)1000000000;
+
+    TEST_ASSERT_TRUE(wc_should_sync(now, now + 6));    /* source ahead +6 */
+    TEST_ASSERT_FALSE(wc_should_sync(now, now + 5));   /* boundary: +5 */
+    TEST_ASSERT_TRUE(wc_should_sync(now, now - 6));    /* source behind -6 */
+    TEST_ASSERT_FALSE(wc_should_sync(now, now - 5));   /* boundary: -5 */
+    TEST_ASSERT_FALSE(wc_should_sync(now, now));       /* equal: nothing */
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -236,5 +314,11 @@ int main(void)
     RUN_TEST(test_time_spec_time_only_uses_injected_date);
     RUN_TEST(test_time_spec_time_only_rejects);
     RUN_TEST(test_stamp_to_epoch_to_seed_decision_roundtrip);
+    RUN_TEST(test_http_date_nov2026);
+    RUN_TEST(test_http_date_leap_day_2028);
+    RUN_TEST(test_http_date_unknown_month_rejected);
+    RUN_TEST(test_http_date_truncated_field_rejected);
+    RUN_TEST(test_http_date_missing_gmt_rejected);
+    RUN_TEST(test_should_sync_bounds);
     return UNITY_END();
 }

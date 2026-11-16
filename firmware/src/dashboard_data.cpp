@@ -24,6 +24,7 @@
 
 #include "esp_lv_adapter_arduino.h"   // esp_lv_adapter_lock/unlock for UI updates
 #include "dashboard_ui.h"
+#include "wall_clock.h"               // Envoy Date header -> clock sync (parse + gate)
 
 /* ---------- state ---------- */
 enum DataState { WIFI_DISABLED, WIFI_CONNECTING, WIFI_BACKOFF, IDLE, FETCHING };
@@ -204,6 +205,10 @@ static int fetch_enphase(uint32_t *watts_now, uint32_t *wh_today,
     http.setTimeout(8000);
     http.addHeader("Authorization", "Bearer " ENVOY_TOKEN);
     http.addHeader("Accept", "application/json");
+    /* collect the "Date" response header for the clock sync below — first
+     * endpoint only, no extra request */
+    const char *hdr_keys[] = { "Date" };
+    http.collectHeaders(hdr_keys, 1);
 
     int code = http.GET();
     uint32_t t_hdr = millis();
@@ -216,6 +221,25 @@ static int fetch_enphase(uint32_t *watts_now, uint32_t *wh_today,
         return -1;
     }
     String payload = http.getString();
+
+    /* Clock sync from the Envoy's Date header: a power loss zeroes the RTC
+     * and the build-stamp seed drifts; the Envoy's Date header is LAN-local,
+     * on-path, and fresh at night, while SNTP is permanently off (it wedged
+     * the loop every boot — see docs/NOTES.md). Same >5 s gate as the relay
+     * path. Log format matches main.cpp apply_time. */
+    String date_hdr = http.header("Date");
+    time_t hdr_epoch = 0;
+    if (date_hdr.length() && wc_parse_http_date(date_hdr.c_str(), &hdr_epoch)) {
+        if (wc_should_sync(time(nullptr), hdr_epoch)) {
+            struct timeval tv = { hdr_epoch, 0 };
+            settimeofday(&tv, nullptr);
+            struct tm tmbuf;
+            char buf[32];
+            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S %Z",
+                     localtime_r(&hdr_epoch, &tmbuf));
+            Serial.printf("[time] set from envoy: %s\n", buf);
+        } /* else silent: within 5 s, nothing to fix */
+    }
     http.end();
     uint32_t t_body = millis();
 
