@@ -40,6 +40,19 @@ bool wc_parse_build_stamp(const char* date, const char* time_, struct tm* out);
  * epoch by more than 5 s (RTC ahead on soft reset must be kept). */
 bool wc_should_seed(time_t now_epoch, time_t build_epoch);
 
+/* Parse an RFC 7231 Date header VALUE, e.g. "Mon, 16 Nov 2026 22:15:41 GMT"
+ * (IMF-fixdate; the leading weekday token is accepted but not validated),
+ * into an absolute UTC epoch. Pure days-from-civil arithmetic — NO mktime
+ * and NO TZ machinery (the header is absolute UTC; newlib has no timegm).
+ * Range-checked: day 1-31, hour 0-23, minute 0-59, second 0-60 (60 is the
+ * tolerated leap second), year 1970-2100. Returns false with *out
+ * untouched on any parse/validation failure. */
+bool wc_parse_http_date(const char* hdr, time_t* out);
+
+/* Envoy clock-sync gate (relay-era policy): true iff the running clock and
+ * the header epoch differ by MORE than 5 s, either direction. */
+bool wc_should_sync(time_t now_epoch, time_t source_epoch);
+
 /* epoch for a parsed tm under the current TZ (mktime wrapper, named
  * for clarity at call sites). */
 time_t wc_tm_to_epoch(struct tm* t);
