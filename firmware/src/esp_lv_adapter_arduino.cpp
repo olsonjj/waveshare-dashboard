@@ -243,6 +243,22 @@ lv_indev_t *esp_lv_adapter_register_touch(const esp_lv_adapter_touch_config_t *c
     return s_ctx.indev;
 }
 
+/* Glitch-diagnosis: addresses of the two RGB panel framebuffers that the
+ * panel DMA actually scans (what the screen shows), plus display size.
+ * In full-refresh mode buf1/buf2 ARE the panel framebuffers. Call under
+ * esp_lv_adapter_lock() to avoid reading mid-flush. */
+esp_err_t esp_lv_adapter_get_panel_framebuffers(void **fb1, void **fb2, int *w, int *h)
+{
+    if (!s_ctx.initialized || (s_ctx.buf1 == nullptr) || (s_ctx.buf2 == nullptr)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (fb1) *fb1 = s_ctx.buf1;
+    if (fb2) *fb2 = s_ctx.buf2;
+    if (w) *w = (int)s_ctx.disp_drv.hor_res;
+    if (h) *h = (int)s_ctx.disp_drv.ver_res;
+    return ESP_OK;
+}
+
 esp_err_t esp_lv_adapter_start(void)
 {
     if ((!s_ctx.initialized) || (s_ctx.display == nullptr) || s_ctx.started) {

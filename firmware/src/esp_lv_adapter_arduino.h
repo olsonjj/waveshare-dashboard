@@ -73,6 +73,11 @@ void esp_lv_adapter_unlock(void);
 lv_display_t *esp_lv_adapter_register_display(const esp_lv_adapter_display_config_t *config);
 lv_indev_t *esp_lv_adapter_register_touch(const esp_lv_adapter_touch_config_t *config);
 
+/* Glitch-diagnosis: addresses of the two RGB panel framebuffers that the
+ * panel DMA actually scans (what the screen shows), plus display size.
+ * Call under esp_lv_adapter_lock() to avoid a mid-write read. */
+esp_err_t esp_lv_adapter_get_panel_framebuffers(void **fb1, void **fb2, int *w, int *h);
+
 #ifdef __cplusplus
 }
 #endif
