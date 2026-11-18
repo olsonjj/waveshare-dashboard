@@ -435,8 +435,8 @@ if onset follows wall-clock rather than power-on, revisit.
 ### Session handoff (2026-11-18 morning)
 
 Session ended ~10:30 with the artifact still unexplained but the search space
-much reduced. Cold-start summary + evidence index + next steps now live in
-Cold-start summary, evidence index, and next steps live in the local file
+much reduced. Cold-start summary, evidence index, and next steps live in the
+local file
 `docs/GHOSTING_INVESTIGATION.md` (INTENTIONALLY UNCOMMITTED: repo-local
 working notes, not for the public/documented tree; ask John for it). Watchers left running: glitch_watch.py
 (serial+buffer dumps, continuous); cam_watch.py stood down (user covered the
