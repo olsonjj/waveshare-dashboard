@@ -115,9 +115,9 @@ static void emit_frame(const char *tag, int w, int h, const void *pix)
     char out[5120 + 1];                              /* 3840 bytes -> 5120 b64 */
     while (len) {
         size_t n = (len < 3840) ? len : 3840;
-        n -= n % 3;                                  /* keep 3-byte groups */
+        size_t full = n - n % 3;                     /* whole 3-byte groups */
         char *o = out;
-        for (size_t i = 0; i < n; i += 3) {
+        for (size_t i = 0; i < full; i += 3) {
             uint32_t v = ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2];
             *o++ = kB64[(v >> 18) & 63];
             *o++ = kB64[(v >> 12) & 63];
@@ -125,12 +125,33 @@ static void emit_frame(const char *tag, int w, int h, const void *pix)
             *o++ = kB64[v & 63];
             p += 3;
         }
+        len -= full;
+        size_t rem = n - full;
+        if (rem) {
+            /* 1-2 trailing bytes: emit canonical zero-padded group (standard
+             * base64 '=' padding); a naive n -= n % 3 would stall the loop.
+             * Keeps the protocol valid for any resolution, not just 800x480. */
+            if (rem == 2) {
+                uint32_t v = ((uint32_t)p[0] << 8) | p[1];      /* 16 bits */
+                *o++ = kB64[(v >> 10) & 63];
+                *o++ = kB64[(v >> 4) & 63];
+                *o++ = kB64[(v << 2) & 63];
+                *o++ = '=';
+            } else {                        /* rem == 1: 2 chars + '==' */
+                uint32_t v = p[0];
+                *o++ = kB64[(v >> 2) & 63];
+                *o++ = kB64[(v << 4) & 63];
+                *o++ = '=';
+                *o++ = '=';
+            }
+            p += rem;
+            len -= rem;
+        }
         *o = 0;
         Serial.write((const uint8_t *)out, (size_t)(o - out));
         Serial.write('\n');
-        len -= n;
     }
-    /* len is now a multiple of 3 by construction (w*h*2 % 3 == 0 for 800x480: 768000 % 3 == 0) */
+    /* host's need_b64 = ((len + 2) / 3) * 4 already accounts for padding */
     Serial.print("###SNAPEND\n");
     Serial.flush();
 }
@@ -157,9 +178,8 @@ static void handle_snapshot(void)
 static void handle_lvsnap(void)
 {
     int w = 0, h = 0;
-    void *fb1 = nullptr, *fb2 = nullptr;
-    if (esp_lv_adapter_get_panel_framebuffers(&fb1, &fb2, &w, &h) != ESP_OK) {
-        Serial.println("###SNAP err: framebuffers not ready");
+    if (esp_lv_adapter_get_display_size(&w, &h) != ESP_OK) {
+        Serial.println("###SNAP err: display not ready");
         return;
     }
     size_t need = (size_t)w * h * sizeof(uint16_t);

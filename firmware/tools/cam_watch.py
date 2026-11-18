@@ -75,8 +75,9 @@ def main():
             buf.extend(chunk)
         return np.frombuffer(bytes(buf), dtype=np.uint8).reshape(H, W)
 
-    warm = np.asarray(read_frame(), dtype=np.float32)
-    if warm is None:
+    # first frame: if the device yields nothing, read_frame() returns None
+    # (check BEFORE np.asarray -- asarray(None) produces an array, not None)
+    if read_frame() is None:
         elog("--- no frames from device %s" % DEV)
         return
     # skip 1 s for exposure to settle
@@ -131,12 +132,13 @@ def main():
             elog("CAM ghost? rows=%s thr=%.1f medrow=%.1f" % (runs, thr, med))
             with open(TRIGGER_FILE, "a") as tf:
                 tf.write(time.strftime("%H:%M:%S\n"))
-            # prune old camera files (keep newest CAM_BURST_KEEP)
-            for old in sorted(glob.glob(os.path.join(CAM_DIR, "*_t-*.png")))[:-CAM_BURST_KEEP]:
+            # prune old camera files (keep newest CAM_BURST_KEEP)  — pattern
+            # covers both _t-NN and _t+NN burst files (but not latest.png)
+            for old in sorted(glob.glob(os.path.join(CAM_DIR, "*_t*.png")))[:-CAM_BURST_KEEP]:
                 os.unlink(old)
             for k, gframe in enumerate(ring + [cur]):
                 save_png(gframe, os.path.join(
-                    CAM_DIR, "%s_t%+03d.png" % (time.strftime("%H%M%S"), k - len(hot))))
+                    CAM_DIR, "%s_t%+03d.png" % (time.strftime("%H%M%S"), k - len(ring))))
         ring.append(cur.copy())
         if len(ring) > BURST:
             ring.pop(0)

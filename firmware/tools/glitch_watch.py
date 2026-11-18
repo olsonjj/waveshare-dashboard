@@ -39,7 +39,7 @@ SNAP_DIR = os.path.join(LOG_DIR, "snaps")
 POLL_INTERVAL_S = float(sys.argv[2]) if len(sys.argv) > 2 else 90.0
 LV_INTERVAL_S = 300.0
 
-MASK = (560, 70)  # x >= MASK[0] and y < MASK[1] = header/clock area: benign diffs
+MASK = (560, 70)  # x >= MASK[0] and y < MASK[1] = header/clock digits: benign diffs
 CAM_TRIGGER = os.path.join(os.path.dirname(EVENT_LOG), "trig_queue")
 
 
@@ -79,11 +79,12 @@ def rgb565_to_png(src, png_path):
 
 
 def diff_stats(cur_raw, prev_raw):
-    """Row-wise diff summary. Returns (rows_changed, row_y0, px_changed,
-    rows_changed_outside_mask, px_changed_outside_mask)."""
+    """Row-wise diff summary. Returns (rows_out, changed_rows, px_total,
+    px_out_mask) where px_out_mask counts differing pixels OUTSIDE the
+    benign header/clock region (MASK)."""
     n = min(len(cur_raw), len(prev_raw))
     w, h = struct.unpack_from("<ii", cur_raw, 4)
-    px_cur, px_prev = cur_raw[12:12 + n - 12], prev_raw[12:12 + n - 12]
+    px_cur, px_prev = cur_raw[12:n], prev_raw[12:n]
     rows, rows_out = [], 0
     px_out = 0
     total_px = 0
@@ -96,11 +97,14 @@ def diff_stats(cur_raw, prev_raw):
         rows.append(y)
         # count differing pixels in the row
         d = [i for i in range(len(row)) if row[i] != prow[i]]
-        in_mask = (y < MASK[1])
-        if in_mask:
-            d_masked = [i for i in d if (i // 2) < MASK[0]]
-            px_out += len(d) - len(d_masked)
-            rows_out += 1 if (len(d) - len(d_masked)) > 0 else 0
+        if y < MASK[1]:
+            # header row: the clock digits (x >= MASK[0]) tick every second,
+            # so they are the BENIGN part and must be masked out; anything
+            # else differing on a header row counts as anomalous
+            d_clock = [i for i in d if (i // 2) >= MASK[0]]
+            out_px = len(d) - len(d_clock)
+            px_out += out_px
+            rows_out += 1 if out_px > 0 else 0
         else:
             px_out += len(d)
             rows_out += 1
@@ -153,11 +157,6 @@ class Watcher:
         except Exception as e:
             log("SNAP png fail %s: %s" % (tag, e))
         # compare with previous of same tag
-        try:
-            import numpy  # noqa
-            has_np = True
-        except ImportError:
-            has_np = False
         prev = self.last_raw.get(tag)
         self.last_raw[tag] = payload
         if prev is None:
@@ -167,8 +166,8 @@ class Watcher:
             if rows == 0:
                 log("SNAP %s ok identical" % tag)
             else:
-                log("SNAP %s CHANGED rows=%s px=%d (outside clock mask: rows=%s px=%d)"
-                    % (tag, ys, px, rows if not isinstance(rows, int) else rows, px_out))
+                log("SNAP %s CHANGED rows=%s px=%d (outside clock mask: rows=%d px=%d)"
+                    % (tag, ys, px, rows, px_out))
         # keep raw files pruned (keep latest 6 per tag)
         for f in sorted(glob.glob(os.path.join(SNAP_DIR, "*_%s.raw" % tag)))[0:-6]:
             os.unlink(f)
@@ -182,7 +181,6 @@ class Watcher:
         ts = time.strftime("%H%M%S")
         path = os.path.join(SNAP_DIR, "%s_%s.raw" % (ts, tag))
         need_b64 = ((ln + 2) // 3) * 4
-        got = 0
         b64 = bytearray(rest)
         got = sum(1 for c in b64 if c not in (10, 13))
         while got < need_b64:

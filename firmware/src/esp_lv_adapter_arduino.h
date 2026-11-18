@@ -78,6 +78,10 @@ lv_indev_t *esp_lv_adapter_register_touch(const esp_lv_adapter_touch_config_t *c
  * Call under esp_lv_adapter_lock() to avoid a mid-write read. */
 esp_err_t esp_lv_adapter_get_panel_framebuffers(void **fb1, void **fb2, int *w, int *h);
 
+/* Glitch-diagnosis: size of the panel framebuffer / LVGL display. Call
+ * under esp_lv_adapter_lock() if the values are used to size a buffer. */
+esp_err_t esp_lv_adapter_get_display_size(int *w, int *h);
+
 #ifdef __cplusplus
 }
 #endif
