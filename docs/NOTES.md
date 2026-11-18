@@ -382,3 +382,63 @@ Final noise model, the whole story:
   ~13 s radio per 5-min poll, quiet panel, user-verified
 The refresh rate at 13 MHz is ~81% of 16 MHz - imperceptible on this
 dashboard. Bounce x20 lever remains unexercised (spare, documented).
+
+### Ghosting round 2: instrumented (2026-11-17, session)
+
+New "horizontal glitch lines" reports (board on wall USB-C power only, UART
+disconnected). Built a full observation stack this session:
+
+* **On-board serial commands** (main.cpp): `SNAPSHOT` dumps both RGB panel
+  framebuffers (B0/B1, what the panel DMA is fed) over UART; `LVSNAP` dumps
+  LVGL's own render (`lv_snapshot_take_to_buf`, PSRAM scratch — LVGL's 128 KB
+  pool can't hold a frame; LV_USE_SNAPSHOT now 1 in both lv_conf.h copies).
+  Frames are base64 + FNV1A-checked. Adapter gained
+  `esp_lv_adapter_get_panel_framebuffers()` under `src/`.
+* **Host tools** (`firmware/tools/`): `glitch_watch.py` owns the CH343 port —
+  logs all serial traffic, polls SNAPSHOT every 90 s + LVSNAP every 5 min,
+  diffs vs previous capture (clock mask), PNGs, and cross-triggers on camera
+  events. `cam_watch.py` watches the panel with the eMeet C960 webcam
+  (30 fps, full-res gray, exposure-gain-normalized row-diff ghost detector;
+  on trigger: 8-frame burst + triggers an immediate synchronized buffer dump).
+  State lives in `~/.glitchwatch/` (events.log, cam_events.log, serial.log,
+  snaps/, cam/). GLITCHWATCH_DIR overrides.
+* **UART CDC gotcha**: the CH343/CDC link is NOT binary-safe — raw dumps lose
+  0x13 bytes silently (flow-control artifact). Everything binary must travel
+  base64. Burned ~30 min; documented here and in tool headers.
+
+Findings of the night:
+
+* **Lens-flare false positive**: with the webcam CLOSE to the panel in a dark
+  room, bright displaced translucent "ghost" copies of UI text ("0.00",
+  "21.9") appear in the camera and are entirely camera optics (internal lens
+  flare) — invisible to the naked eye, absent from framebuffers, gone when
+  the camera moved back. Rule: photograph the panel from >= 2 ft, square-on.
+* **Real ghost episode caught with full instrumentation (20:52)**: user saw
+  dash-ghost rows under the tab title (same signature as 17:14 phone stills).
+  Synchronized B0/B1 dumps taken during the episode (panel frozen, buffers
+  static) are PIXEL-CLEAN. => artifact is generated BELOW the framebuffer, in
+  the RGB scan path (flat cable/connector, RGB timing margin, or noise
+  coupling). Firmware write path, LVGL state, and radio exonerated for this
+  class. Heap telemetry at every poll: heap 79360->79352 (~2.5 h), psram +
+  largest-block constant => heap fragmentation empirically ruled out.
+* Ghost occurred during IDLE (poll was 1 min later; fetch ended 20:48) —
+  NOT the fetch-window radio noise (that saga stays closed). This is the
+  "appears after some time" phenomenon.
+* Touch/wiggle of cable: no visible response (inconclusive for connector).
+
+Leading hypotheses for tomorrow: thermal buildup (backlight heating shifts
+RGB margin — episode ~3.3 h after boot; watch for onset vs power-on clock
+after tonight's 21:03 reboot), or PSU sag/ripple (charger swap still not
+done — TODO). Environmental-EMI theory (desk dock/monitor) not fully dead:
+if onset follows wall-clock rather than power-on, revisit.
+
+### Session handoff (2026-11-18 morning)
+
+Session ended ~10:30 with the artifact still unexplained but the search space
+much reduced. Cold-start summary, evidence index, and next steps live in the
+local file
+`docs/GHOSTING_INVESTIGATION.md` (INTENTIONALLY UNCOMMITTED: repo-local
+working notes, not for the public/documented tree; ask John for it). Watchers left running: glitch_watch.py
+(serial+buffer dumps, continuous); cam_watch.py stood down (user covered the
+camera). Board rebooted 06:14; ran clean through 10:13 (4h) on the same
+charger — PSU swap is the top pending test.
