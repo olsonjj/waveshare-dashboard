@@ -1,11 +1,24 @@
+/*
+ * main.cpp — the board is a pure renderer: socket parse + draw, nothing else.
+ *
+ * Deliberately NO diagnostic code paths (SNAPSHOT/LVSNAP frame dumps, serial
+ * command handler, perf-monitor overlay, heap telemetry): during the
+ * RGB-ghost diagnosis the firmware runs workload-minimal so the panel's
+ * scan path has no co-stressors to point at (see docs/GHOSTING_INVESTIGATION.md
+ * and docs/NOTES.md, 2026-11-19 session). The dump commands live in git
+ * history (revert the strip commit to restore them).
+ *
+ * Periodic work on this board, in full:
+ *   - LVGL tick timer (framework) + render/flush of invalidated regions
+ *   - clock label (1 s), chart now-line (60 s)          [dashboard_ui]
+ *   - push stream: read+parse one ~900 B JSON line, update labels/bars,
+ *     small redraw + flush (1 s)                        [push_client]
+ *   - [hb] heartbeat printf every ~5 s (4 KB TX ring — never spin-waits)
+ * Data layer can be compiled out entirely with -DDBG1_NO_WIFI (A/B builds).
+ */
 #include <Arduino.h>
 #include <esp_display_panel.hpp>
 #include <esp_err.h>
-
-#include <sys/time.h>
-#include <time.h>
-#include <string.h>
-#include <esp_heap_caps.h>
 
 #include <lvgl.h>
 
@@ -25,153 +38,10 @@ using namespace esp_panel::board;
  * the chart now-line render localtime() with TZ=PST8PDT (DST aware). */
 static const char *TZ_PACIFIC = "PST8PDT,M3.2.0,M11.1.0";
 
-/* ------------------------------------------------------------------ */
-/* SNAPSHOT / LVSNAP: binary frame dumps for host-side glitch watching  */
-/* ------------------------------------------------------------------ */
-/* Wire format (one frame):
- *   line:  "###SNAP <tag> <w> <h> <len> <fnv1a-hex>
-"
- *   raw:   12-byte header ('S','N','A','P', int32 LE w, int32 LE h)
- *          (that header shape is what hostsim/raw2png.py reads)
- *          followed by <len> bytes of RGB565 pixels
- *   line:  "###SNAPEND
-"
- * SNAPSHOT  = dumps BOTH RGB panel framebuffers (B0/B1: the pixels the
- *             panel DMA is actually fed under double buffering)
- * LVSNAP    = LVGL's own render of the active screen (what the firmware
- *             *thinks* is on screen). Together they triage panel-only
- *             vs write-path vs draw-state corruption. See docs/NOTES.md. */
-static uint32_t fnv1a(const uint8_t *p, size_t n)
-{
-    uint32_t h = 2166136261u;
-    while (n--) {
-        h ^= *p++;
-        h *= 16777619u;
-    }
-    return h;
-}
-
-/* Base64: the CH343/CDC link is NOT binary-safe (raw dumps lose 0x13 bytes
- * as flow-control artifacts). Everything after the marker line is base64;
- * the 12-byte raw2png header is rebuilt host-side from the marker line.*/
-static const char kB64[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-static void emit_frame(const char *tag, int w, int h, const void *pix)
-{
-    size_t len = (size_t)w * h * sizeof(uint16_t);   /* RGB565 */
-    const uint8_t *p = (const uint8_t *)pix;
-    uint32_t fnv = fnv1a(p, len);
-    Serial.printf("\n###SNAP %s %d %d %lu %08lx\n", tag, w, h,
-                  (unsigned long)len, (unsigned long)fnv);
-    Serial.flush();
-    char out[5120 + 1];                              /* 3840 bytes -> 5120 b64 */
-    while (len) {
-        size_t n = (len < 3840) ? len : 3840;
-        size_t full = n - n % 3;                     /* whole 3-byte groups */
-        char *o = out;
-        for (size_t i = 0; i < full; i += 3) {
-            uint32_t v = ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2];
-            *o++ = kB64[(v >> 18) & 63];
-            *o++ = kB64[(v >> 12) & 63];
-            *o++ = kB64[(v >> 6) & 63];
-            *o++ = kB64[v & 63];
-            p += 3;
-        }
-        len -= full;
-        size_t rem = n - full;
-        if (rem) {
-            /* 1-2 trailing bytes: emit canonical zero-padded group (standard
-             * base64 '=' padding); a naive n -= n % 3 would stall the loop.
-             * Keeps the protocol valid for any resolution, not just 800x480. */
-            if (rem == 2) {
-                uint32_t v = ((uint32_t)p[0] << 8) | p[1];      /* 16 bits */
-                *o++ = kB64[(v >> 10) & 63];
-                *o++ = kB64[(v >> 4) & 63];
-                *o++ = kB64[(v << 2) & 63];
-                *o++ = '=';
-            } else {                        /* rem == 1: 2 chars + '==' */
-                uint32_t v = p[0];
-                *o++ = kB64[(v >> 2) & 63];
-                *o++ = kB64[(v << 4) & 63];
-                *o++ = '=';
-                *o++ = '=';
-            }
-            p += rem;
-            len -= rem;
-        }
-        *o = 0;
-        Serial.write((const uint8_t *)out, (size_t)(o - out));
-        Serial.write('\n');
-    }
-    /* host's need_b64 = ((len + 2) / 3) * 4 already accounts for padding */
-    Serial.print("###SNAPEND\n");
-    Serial.flush();
-}
-
-static void *s_lv_snap_buf = nullptr;   /* PSRAM, LVGL view of the screen */
-
-static void handle_snapshot(void)
-{
-    void *fb1 = nullptr, *fb2 = nullptr;
-    int w = 0, h = 0;
-    if (esp_lv_adapter_get_panel_framebuffers(&fb1, &fb2, &w, &h) != ESP_OK) {
-        Serial.println("###SNAP err: framebuffers not ready");
-        return;
-    }
-    /* Hold the LVGL lock so neither buffer is being written while we read;
-     * the panel keeps DMA-scanning whatever buffer it has (static content).
-     * ~16 s of dump pauses rendering and data-layer ticks - harmless. */
-    ESP_ERROR_CHECK(esp_lv_adapter_lock(-1));
-    emit_frame("B0", w, h, fb1);
-    emit_frame("B1", w, h, fb2);
-    esp_lv_adapter_unlock();
-}
-
-static void handle_lvsnap(void)
-{
-    int w = 0, h = 0;
-    if (esp_lv_adapter_get_display_size(&w, &h) != ESP_OK) {
-        Serial.println("###SNAP err: display not ready");
-        return;
-    }
-    size_t need = (size_t)w * h * sizeof(uint16_t);
-    if (s_lv_snap_buf == nullptr) {
-        s_lv_snap_buf = heap_caps_malloc(need, MALLOC_CAP_SPIRAM);
-        if (s_lv_snap_buf == nullptr) {
-            Serial.println("###SNAP err: no PSRAM for lv snapshot");
-            return;
-        }
-    }
-    ESP_ERROR_CHECK(esp_lv_adapter_lock(-1));
-    lv_img_dsc_t dsc;
-    memset(&dsc, 0, sizeof(dsc));
-    lv_res_t ok = lv_snapshot_take_to_buf(lv_scr_act(), LV_IMG_CF_TRUE_COLOR,
-                                          &dsc, s_lv_snap_buf, (uint32_t)need);
-    esp_lv_adapter_unlock();
-    if (ok != LV_RES_OK) {
-        Serial.println("###SNAP err: lv snapshot failed");
-        return;
-    }
-    emit_frame("LV", dsc.header.w, dsc.header.h, dsc.data);
-}
-
-static void handle_serial_line(const String &line)
-{
-    String s = line;
-    s.trim();
-    if (s == "SNAPSHOT") {
-        handle_snapshot();
-    }
-    if (s == "LVSNAP") {
-        handle_lvsnap();
-    }
-}
-
 void setup()
 {
     /* 4 KB TX ring + 921600 baud: Serial.print() never spin-waits on the
-     128-byte HW FIFO (see NOTES.md serial hardening rationale) */
+     * 128-byte HW FIFO (see NOTES.md serial hardening rationale) */
     Serial.setTxBufferSize(4096);
     Serial.begin(921600);
     Serial.println("solar dashboard start");
@@ -250,25 +120,10 @@ void setup()
 void loop()
 {
     static uint32_t n = 0;
-    static String cmdbuf;
     /* LVGL runs in the adapter's own task; don't touch it from here */
 #ifndef DBG1_NO_WIFI
     push_client_tick();
 #endif
-    while (Serial.available()) {
-        char c = (char)Serial.read();
-        if (c == '\r') {
-            continue;
-        }
-        if (c == '\n') {
-            if (cmdbuf.length()) {
-                handle_serial_line(cmdbuf);
-                cmdbuf = "";
-            }
-        } else if (cmdbuf.length() < 64) {
-            cmdbuf += c;
-        }
-    }
     if ((++n % 50) == 0) {
         Serial.printf("[hb] alive t=%lu ms\n", (unsigned long)millis());
         Serial.flush();
