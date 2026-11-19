@@ -68,22 +68,37 @@ impl DayState {
     }
 }
 
-/// Fresh, empty day at `date` (buckets -1, yield/peak/cached cards zeroed).
-/// Called by the 1-second push tick on a local-date change so a new day
-/// begins clean even before the first Envoy poll of the morning.
+/// Fresh, empty day at `date`: buckets -1, yield/peak zeroed. The 7-day
+/// card is deliberately PRESERVED (the spec resets only `wh_today` and
+/// `watts_peak_today`; the trailing-7-day window changes at most by the
+/// next poll's re-read) — it would otherwise blink 0 for up to 60 s at
+/// midnight.
 pub fn rollover(st: &mut DayState, date: &str) {
+    let wh_7day = st.wh_7day;
     *st = DayState::new(date);
+    st.wh_7day = wh_7day;
+}
+
+/// Roll over to `date` when it differs from the state's date. Returns
+/// true if a rollover happened. Both the poll path (`apply_sample`) and
+/// the 1-second push tick (so a new day begins clean even before the
+/// first Envoy poll of the morning) go through this single check.
+pub fn rollover_if_new_date(st: &mut DayState, date: &str) -> bool {
+    if date != st.date {
+        rollover(st, date);
+        true
+    } else {
+        false
+    }
 }
 
 /// Fold one Envoy sample into the day state (port of solar_hist's
 /// `hist_apply` at 96-bucket granularity). `date`/`bucket` are the
 /// local-time parts of `sample.now`.
 pub fn apply_sample(st: &mut DayState, s: &Sample, date: &str, bucket: usize) {
-    if date != st.date {
-        // local-date rollover (same trigger as solar_hist): the day begins
-        // fresh before the sample is folded in
-        rollover(st, date);
-    }
+    // local-date rollover (same trigger as solar_hist): the day begins
+    // fresh before the sample is folded in
+    rollover_if_new_date(st, date);
     if bucket as i32 != st.last_bucket {
         // close the previous bucket from its baseline
         let prev = st.last_bucket;
@@ -266,11 +281,14 @@ mod tests {
             b(8, 0),
         );
         assert_eq!(st.peak_w, 500);
+        st.wh_7day = 900_000; // assigned by the poller alongside each sample
         rollover(&mut st, "2026-11-20");
         assert_eq!(st.peak_w, 0);
         assert_eq!(st.watts_now, 0);
         assert_eq!(st.wh_today, 0);
-        assert_eq!(st.wh_7day, 0);
+        // wh_7day is NOT reset (spec lists only wh_today/peak): it rides
+        // across midnight until the next poll re-reads the Envoy
+        assert_eq!(st.wh_7day, 900_000);
     }
 
     #[test]

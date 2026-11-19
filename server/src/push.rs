@@ -46,13 +46,11 @@ pub fn serve(listener: TcpListener, state: Arc<Mutex<DayState>>) -> std::io::Res
                 let epoch = now_epoch();
                 let line = {
                     let mut st = state.lock().expect("state lock");
-                    // local-midnight rollover on the push tick, so the
-                    // board starts a fresh, empty day even before the
-                    // first Envoy poll of the morning
+                    // local-midnight rollover on the push tick, so the board
+                    // starts a fresh, empty day even before the first Envoy
+                    // poll of the morning
                     let lp = local_parts(epoch);
-                    if lp.date != st.date {
-                        buckets::rollover(&mut st, &lp.date);
-                    }
+                    buckets::rollover_if_new_date(&mut st, &lp.date);
                     ScreenState::from_day(&st, epoch).to_json_line()
                 };
                 let mut cur = current.lock().expect("client lock");
