@@ -565,14 +565,16 @@ static void build_chart_card(lv_obj_t *parent)
         s_y_lbl[k] = l;
     }
 
-    /* x-axis labels: one every 3 hours, centered on that hour's slot */
+    /* x-axis labels: one every 3 hours, centered on that hour's first
+     * bucket — 3 hours = 12 quarter-bucket slots (the old hourly chart
+     * used 3 slots; the multiplier was the 96-bucket conversion miss) */
     static const char *const XTXT[8] =
         {"12a", "3a", "6a", "9a", "12p", "3p", "6p", "9p"};
     for (int k = 0; k < 8; k++) {
         lv_point_t sz;
         lv_txt_get_size(&sz, XTXT[k], font(FONT_SMALL),
                         0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-        int cx = 14 + PAD_L + k * 3 * BAR_SLOT + BAR_SLOT / 2;
+        int cx = 14 + PAD_L + k * 12 * BAR_SLOT + BAR_SLOT / 2;
         make_label(card, XTXT[k], FONT_SMALL, text_faint(),
                    cx - sz.x / 2, 38 + PAD_T + PLOT_H + 7);
     }
