@@ -40,6 +40,12 @@ POLL_INTERVAL_S = float(sys.argv[2]) if len(sys.argv) > 2 else 90.0
 LV_INTERVAL_S = 300.0
 
 MASK = (560, 70)  # x >= MASK[0] and y < MASK[1] = header/clock digits: benign diffs
+# LVGL perf-monitor overlay (LV_USE_PERF_MONITOR=1, LV_ALIGN_BOTTOM_RIGHT
+# in lv_conf.h): redraws FPS/CPU text every second at the bottom-right
+# corner. Benign, but it flags the bottom rows of every otherwise-identical
+# capture. Nothing else renders at x >= 720 on rows >= 440 (the corner is
+# already covered by the overlay itself).
+PM_MASK = (720, 440)  # x >= PM_MASK[0] and y >= PM_MASK[1]: perf-monitor text
 CAM_TRIGGER = os.path.join(os.path.dirname(EVENT_LOG), "trig_queue")
 
 
@@ -105,6 +111,13 @@ def diff_stats(cur_raw, prev_raw):
             out_px = len(d) - len(d_clock)
             px_out += out_px
             rows_out += 1 if out_px > 0 else 0
+        elif y >= PM_MASK[1]:
+            # perf-monitor rows: the bottom-right FPS/CPU overlay redraws
+            # every second; only differences OUTSIDE it are anomalous
+            d_pm = [i for i in d if (i // 2) >= PM_MASK[0]]
+            out_px = len(d) - len(d_pm)
+            px_out += out_px
+            rows_out += 1 if out_px > 0 else 0
         else:
             px_out += len(d)
             rows_out += 1
@@ -166,7 +179,7 @@ class Watcher:
             if rows == 0:
                 log("SNAP %s ok identical" % tag)
             else:
-                log("SNAP %s CHANGED rows=%s px=%d (outside clock mask: rows=%d px=%d)"
+                log("SNAP %s CHANGED rows=%s px=%d (outside benign masks: rows=%d px=%d)"
                     % (tag, ys, px, rows, px_out))
         # keep raw files pruned (keep latest 6 per tag)
         for f in sorted(glob.glob(os.path.join(SNAP_DIR, "*_%s.raw" % tag)))[0:-6]:
