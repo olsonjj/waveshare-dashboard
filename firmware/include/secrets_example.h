@@ -3,6 +3,10 @@
  * secrets.h is gitignored; never commit real credentials.
  *
  *   cp include/secrets_example.h include/secrets.h
+ *
+ * The board is a pure renderer: it needs only Wi-Fi credentials and the
+ * address of the Rust push server (server/ — see README.md). Envoy
+ * credentials now live ONLY in the server's config.toml (gitignored).
  */
 #pragma once
 
@@ -10,19 +14,7 @@
 #define WIFI_SSID   "your-network-name"
 #define WIFI_PASS   "your-network-password"
 
-// GitHub — repo whose data shows in the "Web Stats" tab.
-// Token is optional: without one you get 60 requests/hour (fine at a 60 s poll),
-// with a fine-grained classic PAT (repo: read) you get 5,000/hour.
-// Create one: GitHub → Settings → Developer settings → Personal access tokens.
-#define GITHUB_REPO  "olsonjj/waveshare-dashboard"
-#define GITHUB_TOKEN ""   // e.g. "github_pat_xxxxxxxxxxxx"
-
-// Enphase IQ Gateway (direct fetch path — fallback/diagnostic; the scheduled
-// poll goes through the LAN relay below). Host = gateway IP; token lives 1 year.
-#define ENVOY_HOST  ""   // e.g. "192.168.182.102"
-#define ENVOY_TOKEN ""
-
-// LAN relay (relay/solar_relay.py): sub-second solar poll + wall-clock epoch.
-// RELAY_KEY must match the relay's RELAY_KEY (env var or default).
-#define RELAY_URL   ""   // e.g. "http://192.168.182.147:8420/solar"
-#define RELAY_KEY   ""
+// Rust push server (server/): the board connects and reads one complete
+// screen-state JSON line per second. Host = the always-on Mac's LAN IP.
+#define PUSH_SERVER_HOST ""   // e.g. "192.168.182.147"
+#define PUSH_SERVER_PORT 8421
