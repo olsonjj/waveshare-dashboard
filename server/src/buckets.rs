@@ -99,6 +99,14 @@ pub fn apply_sample(st: &mut DayState, s: &Sample, date: &str, bucket: usize) {
     // local-date rollover (same trigger as solar_hist): the day begins
     // fresh before the sample is folded in
     rollover_if_new_date(st, date);
+
+    // Envoy cumulative-counter reset (gateway reboot or a gateway TZ that
+    // doesn't match our local midnight): wh_today goes BACKWARD within the
+    // same local day. Without this, every bucket after the reset computes a
+    // negative kWh (observed: -7.793 at bucket 0). Re-anchor at the reset
+    // reading and clamp the live partial to >= 0.
+    let reset = st.last_wh >= 0 && (s.wh_today as i64) < st.last_wh;
+
     if bucket as i32 != st.last_bucket {
         // close the previous bucket from its baseline
         let prev = st.last_bucket;
@@ -114,16 +122,21 @@ pub fn apply_sample(st: &mut DayState, s: &Sample, date: &str, bucket: usize) {
         // the skipped buckets stay -1 (no bar, not a wrong bar).
         let adjacent = (st.last_bucket + 1) as usize % N_BUCKETS == bucket;
         let fresh = st.last_ts > 0 && st.last_ts <= s.now && (s.now - st.last_ts) <= CARRY_FRESH_S;
-        st.wh_start[bucket] = if st.last_wh >= 0 && adjacent && fresh {
+        st.wh_start[bucket] = if !reset && st.last_wh >= 0 && adjacent && fresh {
             st.last_wh as f32
         } else {
             s.wh_today as f32
         };
         st.last_bucket = bucket as i32;
+    } else if reset {
+        // same bucket, but the counter restarted: re-anchor the baseline so
+        // the live partial starts over from zero instead of going negative
+        st.wh_start[bucket] = s.wh_today as f32;
     }
     if st.wh_start[bucket] >= 0.0 {
-        // live partial
-        st.kwh[bucket] = (s.wh_today as f32 - st.wh_start[bucket]) / 1000.0;
+        // live partial (clamped so a reset or reading glitch never renders
+        // a negative bar)
+        st.kwh[bucket] = ((s.wh_today as f32 - st.wh_start[bucket]) / 1000.0).max(0.0);
     }
     st.last_wh = s.wh_today as i64;
     st.last_ts = s.now;
@@ -317,5 +330,32 @@ mod tests {
         for i in (b(9, 2) + 1)..N_BUCKETS {
             assert_eq!(st.kwh[i], -1.0, "bucket {i}");
         }
+    }
+
+    #[test]
+    fn envoy_reset_mid_bucket_reanchors_instead_of_going_negative() {
+        let mut st = DayState::new(D1);
+        let bk = b(11, 0);
+        // Envoy is still counting its own (different-TZ) day
+        apply(&mut st, 7793, 1000, D1, bk);
+        assert_eq!(st.kwh[bk], 0.0);
+        // counter resets mid-bucket: the -7.793 bug would render here
+        apply(&mut st, 0, 1060, D1, bk);
+        assert_eq!(st.kwh[bk], 0.0, "reset must re-anchor, not go negative");
+        // subsequent samples climb from the reset point
+        apply(&mut st, 500, 1120, D1, bk);
+        assert_eq!(st.kwh[bk], 0.5);
+    }
+
+    #[test]
+    fn envoy_reset_at_boundary_does_not_carry_stale_wh() {
+        let mut st = DayState::new(D1);
+        let bk = b(12, 3);
+        apply(&mut st, 7793, 1000, D1, bk);
+        // reset lands in the next (adjacent, fresh) bucket: the carry must
+        // be suppressed so the new bucket anchors at the post-reset reading
+        apply(&mut st, 0, 1060, D1, bk + 1);
+        assert_eq!(st.wh_start[bk + 1], 0.0);
+        assert_eq!(st.kwh[bk + 1], 0.0);
     }
 }

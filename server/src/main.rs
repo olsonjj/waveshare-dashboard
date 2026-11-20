@@ -40,18 +40,18 @@ fn main() {
     let now = now_epoch();
     let today = local_parts(now).date;
     let state = Arc::new(Mutex::new(
-        store::load_today(&conn.lock().unwrap(), &today).unwrap_or_else(|| {
+        store::load_today(&conn.lock().unwrap_or_else(|e| e.into_inner()), &today).unwrap_or_else(|| {
             println!("[state] fresh day {today}");
             DayState::new(&today)
         }),
     ));
-    if let Ok(n) = store::prune(&conn.lock().unwrap(), &today) {
+    if let Ok(n) = store::prune(&conn.lock().unwrap_or_else(|e| e.into_inner()), &today) {
         if n > 0 {
             println!("[state] pruned {n} old day row(s)");
         }
     }
     {
-        let st = state.lock().unwrap();
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
         println!(
             "[state] {} loaded: {} buckets set, peak {} W, last wh {}",
             st.date,
@@ -67,13 +67,14 @@ fn main() {
         let conn = conn.clone();
         let envoy = EnvoyClient::new(&cfg.envoy_host, &cfg.envoy_token);
         let interval = cfg.poll_interval_s.max(5);
+        let mut last_date = today.clone();
         std::thread::spawn(move || loop {
             let t0 = std::time::Instant::now();
             match envoy.fetch() {
                 Ok(r) => {
                     let now = now_epoch();
                     let lp = local_parts(now);
-                    let mut st = state.lock().unwrap();
+                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                     buckets::apply_sample(
                         &mut st,
                         &buckets::Sample {
@@ -85,8 +86,18 @@ fn main() {
                         lp.bucket,
                     );
                     st.wh_7day = r.wh_7day;
-                    if let Err(e) = store::save_today(&conn.lock().unwrap(), &st) {
+                    if let Err(e) = store::save_today(&conn.lock().unwrap_or_else(|e| e.into_inner()), &st) {
                         eprintln!("[poll] db save failed: {e}");
+                    }
+                    // prune yesterday's row once the local date rolls over
+                    // (the startup prune only covers days that predate launch)
+                    if lp.date != last_date {
+                        if let Ok(n) = store::prune(&conn.lock().unwrap_or_else(|e| e.into_inner()), &lp.date) {
+                            if n > 0 {
+                                println!("[poll] pruned {n} old day row(s)");
+                            }
+                        }
+                        last_date = lp.date.clone();
                     }
                     println!(
                         "[poll] {} W, {} Wh today, {} Wh 7d ({:?})",

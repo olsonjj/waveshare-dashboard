@@ -45,7 +45,7 @@ pub fn serve(listener: TcpListener, state: Arc<Mutex<DayState>>) -> std::io::Res
 
                 let epoch = now_epoch();
                 let line = {
-                    let mut st = state.lock().expect("state lock");
+                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                     // local-midnight rollover on the push tick, so the board
                     // starts a fresh, empty day even before the first Envoy
                     // poll of the morning
@@ -53,7 +53,7 @@ pub fn serve(listener: TcpListener, state: Arc<Mutex<DayState>>) -> std::io::Res
                     buckets::rollover_if_new_date(&mut st, &lp.date);
                     ScreenState::from_day(&st, epoch).to_json_line()
                 };
-                let mut cur = current.lock().expect("client lock");
+                let mut cur = current.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(stream) = cur.as_mut() {
                     if stream.write_all(line.as_bytes()).is_err() {
                         *cur = None; // board dropped; wait for reconnect
@@ -65,9 +65,15 @@ pub fn serve(listener: TcpListener, state: Arc<Mutex<DayState>>) -> std::io::Res
 
     loop {
         let (stream, peer) = listener.accept()?;
+        // A half-open client (board stops reading while TCP stays open)
+        // would otherwise fill the send buffer and block write_all forever
+        // while holding the `current` lock — deadlocking this accept loop.
+        // Bound the write so a stuck client errors out and is dropped.
+        stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+        stream.set_nodelay(true)?; // 1 s cadence makes Nagle moot; keep latency tight
         println!("[push] board connected from {peer}");
         // replace any previous connection (dropping the old TcpStream
         // closes it; the pusher's next write error clears it otherwise)
-        *current.lock().expect("client lock") = Some(stream);
+        *current.lock().unwrap_or_else(|e| e.into_inner()) = Some(stream);
     }
 }
