@@ -3,9 +3,9 @@
  *
  * Screen 800x480, dark theme, two functional tabs:
  *   Tab 1 "SOLAR TELEMETRY" — current power card + donut, total yield card
- *                             with target bar, 24-hour generation bar
- *                             chart (hourly kWh; live data via
- *                             dashboard_ui_set_hourly).
+ *                             with target bar, 96-bucket generation bar
+ *                             chart (15-minute kWh; live data via
+ *                             dashboard_ui_set_chart).
  *   Tab 2 "GITHUB OPS"      — intentionally empty for now (design only).
  *
  * Static mock values only fill the cards until the first data poll;
@@ -232,13 +232,15 @@ static constexpr int PAD_L = 40, PAD_R = 12, PAD_T = 8, PAD_B = 24;
 static constexpr int PLOT_W = CH_W - PAD_L - PAD_R;   /* 696 */
 static constexpr int PLOT_H = CH_H - PAD_T - PAD_B;   /* 182 */
 
-/* hourly bar chart: one bar per hour, index 0 = 12:00 AM */
-static constexpr int N_HOURS   = 24;
-static constexpr int BAR_SLOT  = PLOT_W / N_HOURS;    /* 29 px per hour */
-static constexpr int BAR_W     = 18;                  /* bar width, px  */
-static constexpr int N_YLBL    = 5;                   /* 0..ymax, 4 intervals */
+/* 15-minute bar chart: one bar per quarter hour, index 0 = 12:00 AM
+ * (index = hour*4 + min/15; 4 bars per hour). The push server sends all
+ * 96 buckets every second — see spec.md / dashboard_ui_set_chart. */
+static constexpr int N_BUCKETS  = 96;
+static constexpr int BAR_SLOT   = PLOT_W / N_BUCKETS;  /* 7 px per bucket */
+static constexpr int BAR_W      = 5;                   /* bar width, px  */
+static constexpr int N_YLBL     = 5;                   /* 0..ymax, 4 intervals */
 
-static lv_obj_t *s_hour_bar[N_HOURS];       /* bottom-anchored bar objects */
+static lv_obj_t *s_bucket_bar[N_BUCKETS];   /* bottom-anchored bar objects */
 static lv_obj_t *s_y_lbl[N_YLBL];           /* y-axis labels (text only)  */
 static lv_obj_t *s_now_line;               /* current-time marker (2 px) */
 
@@ -477,8 +479,8 @@ static void build_yield_card(lv_obj_t *parent)
     lv_obj_align_to(seven, tri, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
 }
 
-/* Default chart grid before the first data arrives (also what set_hourly
- * falls back to when every hour is missing): 0..2 kWh in 0.5 steps. */
+/* Default chart grid before the first data arrives (also what set_chart
+ * falls back to when every bucket is missing): 0..2 kWh in 0.5 steps. */
 static float chart_ymax(float peak_kwh)
 {
     /* Round the peak bucket UP to the next multiple of 2.0 kWh so the
@@ -533,8 +535,8 @@ static void build_chart_card(lv_obj_t *parent)
     lv_obj_clear_flag(s_now_line, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     update_now_line();
 
-    /* one bar per hour, bottom-anchored; heights set by set_hourly */
-    for (int i = 0; i < N_HOURS; i++) {
+    /* one bar per 15-min bucket, bottom-anchored; heights set by set_chart */
+    for (int i = 0; i < N_BUCKETS; i++) {
         lv_obj_t *b = lv_obj_create(plot);
         lv_obj_set_size(b, BAR_W, 0);
         lv_obj_set_pos(b, PAD_L + i * BAR_SLOT + (BAR_SLOT - BAR_W) / 2,
@@ -548,7 +550,7 @@ static void build_chart_card(lv_obj_t *parent)
         lv_obj_set_style_border_width(b, 0, 0);
         lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);   /* no data yet */
-        s_hour_bar[i] = b;
+        s_bucket_bar[i] = b;
     }
 
     /* y-axis labels (card children, left gutter, right-aligned) */
@@ -563,38 +565,41 @@ static void build_chart_card(lv_obj_t *parent)
         s_y_lbl[k] = l;
     }
 
-    /* x-axis labels: one every 3 hours, centered on that hour's slot */
+    /* x-axis labels: one every 3 hours, centered on that hour's first
+     * bucket — 3 hours = 12 quarter-bucket slots (the old hourly chart
+     * used 3 slots; the multiplier was the 96-bucket conversion miss) */
     static const char *const XTXT[8] =
         {"12a", "3a", "6a", "9a", "12p", "3p", "6p", "9p"};
     for (int k = 0; k < 8; k++) {
         lv_point_t sz;
         lv_txt_get_size(&sz, XTXT[k], font(FONT_SMALL),
                         0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-        int cx = 14 + PAD_L + k * 3 * BAR_SLOT + BAR_SLOT / 2;
+        int cx = 14 + PAD_L + k * 12 * BAR_SLOT + BAR_SLOT / 2;
         make_label(card, XTXT[k], FONT_SMALL, text_faint(),
                    cx - sz.x / 2, 38 + PAD_T + PLOT_H + 7);
     }
 
     /* pre-data state: empty grid with the default 0..2 kWh labels */
-    dashboard_ui_set_hourly(nullptr);
+    dashboard_ui_set_chart(nullptr);
 }
 
-/* Update the 24-hour generation bar chart (see dashboard_ui.h). */
-void dashboard_ui_set_hourly(const float kwh[24])
+/* Update the 96-bucket (15-minute) generation bar chart (see
+ * dashboard_ui.h). */
+void dashboard_ui_set_chart(const float kwh[N_BUCKETS])
 {
-    if (!s_hour_bar[0] || !s_y_lbl[0]) return;   /* init not run yet */
+    if (!s_bucket_bar[0] || !s_y_lbl[0]) return;   /* init not run yet */
 
     float peak = 0.0f;
     if (kwh) {
-        for (int i = 0; i < N_HOURS; i++) {
+        for (int i = 0; i < N_BUCKETS; i++) {
             if (kwh[i] > peak) peak = kwh[i];
         }
     }
     float ymax = chart_ymax(peak);
 
-    for (int i = 0; i < N_HOURS; i++) {
-        lv_obj_t *b = s_hour_bar[i];
-        if (!kwh || kwh[i] < 0.0f) {              /* missing hour: no bar */
+    for (int i = 0; i < N_BUCKETS; i++) {
+        lv_obj_t *b = s_bucket_bar[i];
+        if (!kwh || kwh[i] < 0.0f) {            /* missing bucket: no bar */
             lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
             continue;
         }

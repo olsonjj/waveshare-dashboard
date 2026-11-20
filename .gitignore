@@ -12,8 +12,12 @@ pio-build/
 secrets.h
 **/secrets.h
 
-# Relay runtime state (hourly solar history — data, not code)
-relay/solar_history.json
+# Server-local secrets + runtime state (push service)
+server/config.toml
+server/data/
+
+# Rust build artifacts
+server/target/
 
 # OS cruft
 .DS_Store

@@ -442,3 +442,38 @@ working notes, not for the public/documented tree; ask John for it). Watchers le
 (serial+buffer dumps, continuous); cam_watch.py stood down (user covered the
 camera). Board rebooted 06:14; ran clean through 10:13 (4h) on the same
 charger — PSU swap is the top pending test.
+
+## 2026-11-18 evening: poll → push rearchitecture implemented
+
+Per the §8 root cause (RGB LCD scan-out vs WiFi radio airtime on the shared
+Octal-SPI bus + core 0; direct mode unsalvageable — no downward PCLK margin,
+×20 bounce buffer insufficient), the dashboard moved from "board polls" to
+"host pushes":
+
+- **`server/` (new, Rust)**: polls the Envoy every 60 s (bearer token in a
+  gitignored `server/config.toml` — no longer in any firmware file),
+  accumulates today's 15-minute buckets (96 per day; direct port of the
+  retired `solar_hist` state machine: straddle carry, 180 s gap gate,
+  midnight rollover — the analog of the old 900 s gate at the new 60 s
+  cadence), persists today's state in SQLite (`server/data/solar.db`, one
+  table, restart mid-day resumes without double-counting), and pushes the
+  complete screen state as newline-delimited JSON over TCP :8421 every
+  second. Contract is versioned (`"v":1`, `server/src/contract.rs`); the
+  pushed `epoch` is the board's only clock source.
+- **Board**: `dashboard_data.cpp` (Envoy TLS + relay poll + GitHub fetch),
+  `solar_hist`, `wall_clock` (build-stamp seed + serial TIME), NVS snapshot
+  paths — all deleted. New `push_client.cpp` (~250 lines): radio-quiet
+  WiFi connect (same backoff ladder) + TCP line reader + ArduinoJson into
+  the existing renderer. Chart is now 96 15-minute bars
+  (`dashboard_ui_set_chart`). Peak = max watts observed today, tracked
+  server-side.
+- **`relay/` deleted** (its runtime history file was already gitignored
+  data). The `pio test -e native` Unity harness is retired with `solar_hist`
+  / `wall_clock`; the Rust suite (`just test`) mirrors its case list.
+- Smoke-tested against the real Envoy and the board: the push-demo build
+  board connected to :8421 and the first poll line read
+  `0 W, 21121 Wh today, 7d 125721 Wh`.
+
+Radio budget check: board airtime is now ~1 s WiFi connect at boot plus
+millisecond receives of ~900 B lines once per second — the state the §8
+push-demo experiment proved clean.

@@ -153,15 +153,19 @@ int main(int argc, char **argv)
     dashboard_ui_init();
 
     /* canned mid-afternoon sample so screenshots show a POPULATED
-     * dashboard (plausible values, not real): full buckets 6..13,
-     * partial current hour 14, totals consistent with the bars */
+     * dashboard (plausible values, not real): full hours 6..13 (4
+     * quarter-buckets each), partial current hour 14, totals
+     * consistent with the bars */
     {
-        float kwh[24];
-        for (int i = 0; i < 24; i++) kwh[i] = -1.0f;   /* -1 = missing */
+        float kwh[96];
+        for (int i = 0; i < 96; i++) kwh[i] = -1.0f;   /* -1 = missing */
         static const float afternoon[9] = { 0.2f, 0.9f, 1.6f, 2.2f, 2.6f,
                                            2.9f, 2.8f, 1.6f, 0.9f };
-        for (int i = 0; i < 9; i++) kwh[6 + i] = afternoon[i];
-        dashboard_ui_set_hourly(kwh);
+        for (int h = 6; h <= 13; h++)
+            for (int q = 0; q < 4; q++)
+                kwh[h * 4 + q] = afternoon[h - 6] / 4.0f;
+        kwh[14 * 4 + 0] = kwh[14 * 4 + 1] = 0.9f / 4.0f;   /* partial hour */
+        dashboard_ui_set_chart(kwh);
         dashboard_ui_set_solar(2400, 15700, 4900, 138500, "02:35 PM");
     }
 

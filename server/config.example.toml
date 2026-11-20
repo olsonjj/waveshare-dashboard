@@ -1,0 +1,17 @@
+# solar-push-server configuration — copy to config.toml (gitignored) and fill in.
+# Envoy host (IP or hostname on the LAN) and its bearer token are secrets:
+# never commit the real values.
+
+envoy_host = "192.168.182.102"   # your Enphase IQ Gateway's LAN address
+envoy_token = "eyJ..."           # Envoy local API bearer token
+
+# TCP port the board connects to for the 1 s push stream.
+listen_port = 8421
+
+# SQLite file holding today's buckets (survives service restarts).
+db_path = "data/solar.db"
+
+# Envoy poll cadence, seconds. The Envoy refreshes its watts ~5 min, so
+# faster polls mostly re-read unchanged values (accepted: keeps the
+# 1 s pushes fed with fresh-enough data).
+poll_interval_s = 60

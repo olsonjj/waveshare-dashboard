@@ -279,7 +279,9 @@
  *-----------*/
 
 /*1: Show CPU usage and FPS count*/
-#define LV_USE_PERF_MONITOR 1
+#define LV_USE_PERF_MONITOR 0   /* 0: sys-layer FPS/CPU overlay OFF — draws every
+                                   * second; board is workload-minimal for the ghost
+                                   * diagnosis (2026-11-19). Was 1 from Waveshare defaults. */
 #if LV_USE_PERF_MONITOR
     #define LV_USE_PERF_MONITOR_POS LV_ALIGN_BOTTOM_RIGHT
 #endif

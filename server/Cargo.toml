@@ -1,0 +1,16 @@
+[package]
+name = "solar-push-server"
+version = "0.1.0"
+edition = "2021"
+description = "Push-based solar dashboard host service: polls the Envoy, pushes ready-to-render screen state to the board over TCP"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+# blocking HTTP against the Envoy's self-signed TLS; the trusted-LAN
+# invalid-cert acceptance is explicit in envoy.rs
+reqwest = { version = "0.12", features = ["blocking"] }
+toml = "0.8"
+chrono = "0.4"
+chrono-tz = "0.10"
