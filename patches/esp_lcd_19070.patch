@@ -1,0 +1,26 @@
+--- a/components/esp_lcd/rgb/esp_lcd_panel_rgb.c
++++ b/components/esp_lcd/rgb/esp_lcd_panel_rgb.c
+@@ -1150,10 +1150,10 @@
+ {
+     int bb_size_px = panel->bb_size / (panel->fb_bits_per_pixel / 8);
+     bool do_restart = false;
++    portENTER_CRITICAL_ISR(&panel->spinlock);
+ #if CONFIG_LCD_RGB_RESTART_IN_VSYNC
+     do_restart = true;
+ #else
+-    portENTER_CRITICAL_ISR(&panel->spinlock);
+     if (panel->flags.need_restart) {
+         panel->flags.need_restart = false;
+         do_restart = true;
+@@ -1161,9 +1161,10 @@
+     if (panel->bb_eof_count < panel->expect_eof_count) {
+         do_restart = true;
+     }
++#endif // CONFIG_LCD_RGB_RESTART_IN_VSYNC
++    // DMA restart always relaunches from bounce buffer 0. Keep the software index in sync
+     panel->bb_eof_count = 0;
+     portEXIT_CRITICAL_ISR(&panel->spinlock);
+-#endif // CONFIG_LCD_RGB_RESTART_IN_VSYNC
+ 
+     if (!do_restart) {
+         return;

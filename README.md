@@ -92,6 +92,18 @@ The board's wall clock comes entirely from the pushed `epoch` (nudged
 when drift > 5 s). The 921600-baud serial console keeps the `SNAPSHOT` /
 `LVSNAP` frame-dump diagnostics from the ghosting investigation.
 
+## ESP-IDF driver patch (ghosting fix)
+
+The RGB panel driver (`esp_lcd`) ships precompiled with a bounce-buffer
+desync bug ([espressif/esp-idf#19070](https://github.com/espressif/esp-idf/issues/19070))
+that causes the persistent screen ghost. This repo carries the one-line
+fix as a patch and documents how to rebuild + install the patched
+`libesp_lcd.a`: see [patches/README.md](patches/README.md).
+
+Remove this workaround once a tagged ESP-IDF release and an
+arduino-esp32 core (3.3.13+) ship the fix upstream (it's already on
+`release/v5.5`, not yet tagged).
+
 ## Status
 
 - [x] Bring-up (screen, touch, flashing) — 2024-11
