@@ -64,6 +64,7 @@ static uint32_t wifi_fail_count = 0;
 static NetworkClient sock;
 static char line_buf[LINE_BUF_LEN];
 static size_t line_len = 0;
+static uint32_t last_line_ms = 0;   /* last complete line (staleness watchdog) */
 
 static void enter_state(PushState s)
 {
@@ -182,6 +183,7 @@ static void feed_byte(uint8_t c)
         if (line_len > 0 && line_buf[line_len - 1] == '\r') line_len--;
         line_buf[line_len] = '\0';
         if (line_len > 0) process_line(line_buf);
+        last_line_ms = millis();   /* any complete line proves the stream is alive */
         line_len = 0;
         return;
     }
@@ -266,6 +268,7 @@ void push_client_tick(void)
             if (sock.connect(PUSH_SERVER_HOST, PUSH_SERVER_PORT)) {
                 Serial.println("[push] linked — reading 1 s push stream");
                 line_len = 0;
+                last_line_ms = millis();   /* grace period starts now */
                 enter_state(LINKED);
             } else {
                 next_action_ms = millis() + SOCK_RETRY_MS;
@@ -279,6 +282,17 @@ void push_client_tick(void)
             sock.stop();
             enter_state(SOCK_TRYING);
             next_action_ms = millis() + SOCK_RETRY_MS;
+            break;
+        }
+        /* half-open detection: the contract guarantees a line every second,
+         * so silence means the server died without a FIN/RST (or the path
+         * dropped while WiFi stays associated) — connected() stays true and
+         * available() returns 0 forever otherwise. */
+        if (millis() - last_line_ms > 15000UL) {
+            Serial.println("[push] stream stale (no line in 15 s) — reconnecting");
+            sock.stop();
+            enter_state(SOCK_TRYING);
+            next_action_ms = millis();   /* reconnect immediately */
             break;
         }
         /* millisecond-scale: drain whatever has arrived since last tick */
