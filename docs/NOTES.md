@@ -477,3 +477,25 @@ Octal-SPI bus + core 0; direct mode unsalvageable — no downward PCLK margin,
 Radio budget check: board airtime is now ~1 s WiFi connect at boot plus
 millisecond receives of ~900 B lines once per second — the state the §8
 push-demo experiment proved clean.
+
+## 2026-11-20: perf-monitor CPU% diagnosis (~99% reported)
+
+`[DEBUG-c99]` serial probes (added + reverted on branch
+`feat/network-lost-pill`, PR #12; tooling preserved on `diag/cpu-probes`)
+measured, over the CH343 console at 921600:
+
+- flush ≈ 2/s steady — NO per-frame invalidation; `touchPressed 0/s`
+  untouched (no phantom GT911 presses); the 1 Hz coalesce timer works.
+- `lv_timer_handler()` called ≈ 2/s — the adapter worker sleeps its
+  500 ms `task_max_delay_ms` cap between passes, so the 20 ms
+  `LV_DISP_DEF_REFR_PERIOD` is unreachable and touch is sampled ~2 Hz.
+- handler busy ≈ 99% (esp_timer measurement around
+  `lv_timer_handler()`) — the LVGL perf meter was honest.
+
+**Root cause:** RGB full-refresh renders the entire 800×480 screen into
+the PSRAM framebuffers, contending with the always-on ~26 MB/s scanout
+DMA (GHOSTING_INVESTIGATION §8) — ~450–500 ms per render. Two renders/s
+(one coalesce tick, one push-data cycle on alternating worker passes)
+saturate the LVGL task. Coalescing was already at the app's floor; the
+remaining lever is the transport (partial refresh with internal draw
+buffers, or a tear-free hybrid) — decision pending.
