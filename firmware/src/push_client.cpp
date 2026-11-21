@@ -41,6 +41,14 @@ static const uint32_t backoff_s[] = {15, 45, 120, 300, 900, 1800};
 /* Socket reconnect cadence (plain LAN TCP connect: milliseconds of radio). */
 static const uint32_t SOCK_RETRY_MS = 10UL * 1000UL;
 
+/* Staleness watchdog: the contract guarantees one line per second, so 15 s
+ * of silence means the server died without a FIN/RST (or the path dropped). */
+static const uint32_t STREAM_STALE_MS = 15UL * 1000UL;
+
+/* Bounded LVGL lock for data->UI calls: a wedged LVGL task must never
+ * freeze the data layer — skip/retry the UI update instead. */
+static const TickType_t UI_LOCK_TIMEOUT = pdMS_TO_TICKS(5000);
+
 /* Push contract (server/src/contract.rs): one JSON line per second.
  * 96 float buckets + scalar fields comfortably fit; oversized lines are
  * dropped and logged rather than corrupting the next one. */
@@ -58,6 +66,9 @@ enum PushState {
 };
 
 static PushState state = WIFI_CONNECTING;
+static bool boot_grace = true;   /* only the FIRST Wi-Fi handshake counts as
+                                  * "in progress, don't alarm" (boot); mid-run
+                                  * handshakes after a drop are a real outage */
 static uint32_t state_since_ms = 0;
 static uint32_t next_action_ms = 0;   /* backoff expiry / socket retry */
 static uint32_t wifi_fail_count = 0;
@@ -167,7 +178,7 @@ static void process_line(char *line)
 
     /* bounded lock: a wedged LVGL task must never freeze the data layer —
      * skip the UI update this second instead of waiting forever */
-    if (esp_lv_adapter_lock(pdMS_TO_TICKS(5000)) == ESP_OK) {
+    if (esp_lv_adapter_lock(UI_LOCK_TIMEOUT) == ESP_OK) {
         dashboard_ui_set_solar(watts_now, wh_today, peak, wh_7day, upd);
         dashboard_ui_set_chart(kwh);
         esp_lv_adapter_unlock();
@@ -206,17 +217,20 @@ static void feed_byte(uint8_t c)
  * succeeds. If the 5 s lock times out the edge is not consumed, so the
  * next ~100 ms tick retries — a "lost" transition can never be dropped.
  *
- * WIFI_CONNECTING is reported as up (radio handshake in progress): a
- * normal boot passes through it in ~1 s before SOCK_TRYING, so the pill
- * doesn't flash at boot; if the handshake fails, WIFI_BACKOFF reports
- * lost and the pill appears. Any other non-LINKED state (socket refused,
- * stream dropped/stale, no credentials) reports lost. */
+ * WIFI_CONNECTING is reported as up only while boot_grace is set (the
+ * first Wi-Fi handshake, i.e. at boot): a normal boot passes through it
+ * in ~1 s before SOCK_TRYING, so the pill doesn't flash at boot; if the
+ * handshake fails, WIFI_BACKOFF reports lost and the pill appears. After
+ * the grace flag clears, a mid-run re-handshake (Wi-Fi dropped while
+ * streaming) is an outage and reports lost immediately. Any other
+ * non-LINKED state (socket refused, stream dropped/stale, no credentials)
+ * reports lost. */
 static bool link_reported = true;
 
 static void report_link(bool up)
 {
     if (up == link_reported) return;
-    if (esp_lv_adapter_lock(pdMS_TO_TICKS(5000)) != ESP_OK) {
+    if (esp_lv_adapter_lock(UI_LOCK_TIMEOUT) != ESP_OK) {
         Serial.println("[push] ui lock TIMEOUT - link pill update retried next tick");
         return;   /* edge NOT consumed — retry on the next tick */
     }
@@ -264,6 +278,7 @@ void push_client_tick(void)
     case WIFI_CONNECTING:
         if (WiFi.status() == WL_CONNECTED) {
             wifi_fail_count = 0;
+            boot_grace = false;   /* first handshake completed — later ones alarm */
             enter_state(SOCK_TRYING);
             next_action_ms = millis();          /* first connect attempt now */
         } else if (millis() - state_since_ms > WIFI_CONNECT_TIMEOUT_MS) {
@@ -316,7 +331,7 @@ void push_client_tick(void)
          * so silence means the server died without a FIN/RST (or the path
          * dropped while WiFi stays associated) — connected() stays true and
          * available() returns 0 forever otherwise. */
-        if (millis() - last_line_ms > 15000UL) {
+        if (millis() - last_line_ms > STREAM_STALE_MS) {
             Serial.println("[push] stream stale (no line in 15 s) — reconnecting");
             sock.stop();
             enter_state(SOCK_TRYING);
@@ -332,8 +347,7 @@ void push_client_tick(void)
         break;
     }
 
-    /* every exit path: reflect link health on the header pill
-     * (LINKED counts as up; the in-progress Wi-Fi handshake is tolerated
-     * so a normal boot doesn't flash; every other state reports lost) */
-    report_link(state == LINKED || state == WIFI_CONNECTING);
+    /* every exit path: reflect link health on the header pill (LINKED is
+     * up; the first boot handshake is tolerated; everything else alarms) */
+    report_link(state == LINKED || (state == WIFI_CONNECTING && boot_grace));
 }
