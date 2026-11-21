@@ -26,6 +26,13 @@
 #include "dashboard_ui.h"
 #include "push_client.h"
 
+/* [DEBUG-c99] CPU diagnosis counters — defined in esp_lv_adapter_arduino.cpp.
+ * Remove with this tag. */
+extern volatile uint32_t dbg_flush_cnt;
+extern volatile uint32_t dbg_touch_pressed_cnt;
+extern volatile uint64_t dbg_handler_busy_us;
+extern volatile uint32_t dbg_handler_calls;
+
 using namespace esp_panel::drivers;
 using namespace esp_panel::board;
 
@@ -124,9 +131,28 @@ void loop()
 #ifndef DBG1_NO_WIFI
     push_client_tick();
 #endif
-    if ((++n % 50) == 0) {
-        Serial.printf("[hb] alive t=%lu ms\n", (unsigned long)millis());
-        Serial.flush();
+    if ((++n % 10) == 0) {   /* [DEBUG-c99] 1 s report — remove with this tag */
+        static uint32_t w_start = 0, f0 = 0, t0 = 0, c0 = 0;
+        static uint64_t b0 = 0;
+        uint32_t now = millis();
+        if (w_start == 0) {
+            w_start = now; f0 = dbg_flush_cnt; t0 = dbg_touch_pressed_cnt;
+            c0 = dbg_handler_calls; b0 = dbg_handler_busy_us;
+        } else {
+            uint32_t dt = now - w_start;
+            uint32_t f = dbg_flush_cnt - f0;
+            uint32_t tp = dbg_touch_pressed_cnt - t0;
+            uint64_t busy = dbg_handler_busy_us - b0;
+            uint32_t calls = dbg_handler_calls - c0;
+            Serial.printf("[DEBUG-c99] %ums: flush %u/s touchPressed %u/s handlerBusy %lu%% calls %u/s\n",
+                          (unsigned)dt,
+                          (unsigned)(f * 1000 / dt), (unsigned)(tp * 1000 / dt),
+                          (unsigned long)((busy * 100) / ((uint64_t)dt * 1000)),
+                          (unsigned)(calls * 1000 / dt));
+            w_start = now; f0 = dbg_flush_cnt; t0 = dbg_touch_pressed_cnt;
+            c0 = dbg_handler_calls; b0 = dbg_handler_busy_us;
+            Serial.flush();
+        }
     }
     delay(100);
 }

@@ -8,6 +8,15 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "esp_timer.h"
+
+/* [DEBUG-c99] CPU diagnosis counters — remove with this tag. See main.cpp
+ * loop() for the 1 s serial report. Updated in the LVGL/worker tasks,
+ * read racy from loop(): diagnostics only. */
+volatile uint32_t dbg_flush_cnt = 0;          /* full-refresh frame renders */
+volatile uint32_t dbg_touch_pressed_cnt = 0;  /* indev reads reporting a press */
+volatile uint64_t dbg_handler_busy_us = 0;    /* time inside lv_timer_handler */
+volatile uint32_t dbg_handler_calls = 0;      /* lv_timer_handler() invocations */
 
 using namespace esp_panel::drivers;
 
@@ -46,7 +55,12 @@ static void lvgl_worker(void *arg)
     uint32_t delay_ms = s_ctx.config.task_max_delay_ms;
     while (true) {
         if (esp_lv_adapter_lock(-1) == ESP_OK) {
+            /* [DEBUG-c99] */
+            uint64_t t0 = esp_timer_get_time();
             delay_ms = lv_timer_handler();
+            uint64_t dt = esp_timer_get_time() - t0;
+            dbg_handler_busy_us += dt;
+            dbg_handler_calls++;
             esp_lv_adapter_unlock();
         }
 
@@ -85,6 +99,7 @@ static void flush_cb(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t 
 
     if (s_ctx.rgb_full_refresh) {
         if (lv_disp_flush_is_last(disp_drv)) {
+            dbg_flush_cnt++;   /* [DEBUG-c99] */
             lcd->switchFrameBufferTo(color_map);
             ulTaskNotifyValueClear(nullptr, ULONG_MAX);
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -112,6 +127,7 @@ static void touch_read_cb(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
     TouchPoint point = {};
 
     if ((touch != nullptr) && (touch->readPoints(&point, 1, 0) > 0)) {
+        dbg_touch_pressed_cnt++;   /* [DEBUG-c99] */
         data->point.x = point.x;
         data->point.y = point.y;
         data->state = LV_INDEV_STATE_PRESSED;
