@@ -284,10 +284,14 @@
  * monitor flip was briefly inoperative because only the include/ twin was
  * edited. */
 #ifndef LV_USE_PERF_MONITOR
-#define LV_USE_PERF_MONITOR 1   /* 1: sys-layer FPS/CPU overlay (bottom-right) —
-                                 * on per user request; overridable from
-                                 * platformio.ini build_flags. Was 0 for the
-                                 * workload-minimal ghost diagnosis (2026-11-19). */
+#define LV_USE_PERF_MONITOR 0   /* 0 — PERF Step 1 (2026-11-21): LVGL 8.4's
+                                 * monitor label re-invalidates after any
+                                 * refresh ≥300 ms old (lv_refr.c), and in
+                                 * full-refresh mode every invalidation is a
+                                 * whole 750 KB render → the monitor doubled
+                                 * our render rate to 2/s (measured, NOTES.md
+                                 * 2026-11-21). Flip to 1 only for short diag
+                                 * builds; it costs ~47% of a core. */
 #endif
 #if LV_USE_PERF_MONITOR
     #define LV_USE_PERF_MONITOR_POS LV_ALIGN_BOTTOM_RIGHT
