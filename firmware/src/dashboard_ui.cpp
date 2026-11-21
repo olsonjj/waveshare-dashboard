@@ -218,6 +218,26 @@ static lv_obj_t *s_yield_val_lbl = nullptr;   /* TOTAL YIELD card value (kWh) */
 static lv_obj_t *s_yield_7d_lbl = nullptr;    /* 7 Day Yield bottom stat (kWh) */
 static lv_obj_t *s_yield_unit_lbl = nullptr;  /* kWh unit; re-aligned each update */
 static lv_obj_t *s_power_upd_lbl = nullptr;  /* last-updated pill label */
+static lv_obj_t *s_link_pill = nullptr;      /* header NETWORK LOST pill */
+
+/* ---- coalesced update buffers ---------------------------------------
+ * Full-refresh RGB mode: EVERY invalidation costs a full 800x480 PSRAM
+ * re-render + scanout wait inside lv_timer_handler (see flush_cb). The
+ * push stream (1 Hz), the clock (1 Hz), the now-line (1 Hz) and the perf
+ * monitor (≈3 Hz) would otherwise dirty the screen several times per
+ * second — each change paying the full-screen price. All public setters
+ * therefore only buffer; a single 1 Hz timer applies everything pending
+ * (clock, now-line, solar, chart, link pill) in one invalidated frame. */
+static struct {
+    bool pending;
+    uint32_t watts_now, wh_today, watts_peak, wh_7day;
+    char updated[16];                 /* caller-built pill text, copied */
+} s_pend_solar;
+static bool s_pend_chart_pending;
+static float s_pend_chart[96];        /* -1.0f = no bar */
+static struct { bool pending; bool up; } s_pend_link;
+
+static void apply_chart(const float kwh[96]);   /* defined below; used at build */
 
 /* GitHub tab is design-only for now — hidden until it gets real data. */
 #define GITHUB_TAB_ENABLED 0
@@ -407,6 +427,13 @@ static void build_header(lv_obj_t *scr)
         lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     }
 
+    /* --- network-lost alert pill: shown whenever the push link is down,
+     * left of the (decorative) signal bars; hidden once LINKED --- */
+    s_link_pill = make_pill(header, "NETWORK LOST", color_alert(), opa_tint_14,
+                            true, danger_tint(), FONT_BODY);
+    lv_obj_align(s_link_pill, LV_ALIGN_RIGHT_MID, -170, 0);  /* right edge x≈630; bars start 635 */
+    lv_obj_add_flag(s_link_pill, LV_OBJ_FLAG_HIDDEN);
+
     lv_obj_t *clk = lv_obj_create(header);
     lv_obj_set_size(clk, 118, 32);
     lv_obj_align(clk, LV_ALIGN_RIGHT_MID, -14, 0);
@@ -585,12 +612,12 @@ static void build_chart_card(lv_obj_t *parent)
     }
 
     /* pre-data state: empty grid with the default 0..2 kWh labels */
-    dashboard_ui_set_chart(nullptr);
+    apply_chart(nullptr);
 }
 
-/* Update the 96-bucket (15-minute) generation bar chart (see
- * dashboard_ui.h). */
-void dashboard_ui_set_chart(const float kwh[N_BUCKETS])
+/* Internal: applies chart state to the live objects. Called by the 1 Hz
+ * coalesce timer (and once at build for the empty-axis default). */
+static void apply_chart(const float kwh[N_BUCKETS])
 {
     if (!s_bucket_bar[0] || !s_y_lbl[0]) return;   /* init not run yet */
 
@@ -625,10 +652,54 @@ void dashboard_ui_set_chart(const float kwh[N_BUCKETS])
     }
 }
 
+/* Public setter: buffers only — applied by the 1 Hz coalesce timer, so a
+ * push line costs at most one invalidated frame (shared with the clock,
+ * now-line and solar updates). Call under the LVGL adapter lock. */
+void dashboard_ui_set_chart(const float kwh[N_BUCKETS])
+{
+    for (int i = 0; i < N_BUCKETS; i++)
+        s_pend_chart[i] = (kwh && kwh[i] >= 0.0f) ? kwh[i] : -1.0f;
+    s_pend_chart_pending = true;
+}
+
 /* ------------------------------------------------------------------ */
 /* clock + entry points                                                */
 /* ------------------------------------------------------------------ */
-static void clock_timer_cb(lv_timer_t *)
+/* Applies solar values to the live labels. Called by the 1 Hz coalesce
+ * timer only. */
+static void apply_solar(uint32_t watts_now, uint32_t wh_today,
+                        uint32_t watts_peak, uint32_t wh_7day,
+                        const char *updated)
+{
+    /* 32 covers the longest possible string over the full uint32 range:
+     * "7 Day Yield 4294967.29 kWh" (27) — exact-fit buffers clipped the
+     * unit before (buf[20] with "7 Day Yield 142.73 kWh"), so this is a
+     * class-kill, not another exact fit */
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.2f", watts_now / 1000.0);
+    lv_label_set_text(s_power_val_lbl, buf);
+    snprintf(buf, sizeof(buf), "%.2f", wh_today / 1000.0);
+    lv_label_set_text(s_yield_val_lbl, buf);
+    snprintf(buf, sizeof(buf), "Peak %.2f kW", watts_peak / 1000.0);
+    lv_label_set_text(s_power_peak_lbl, buf);
+    snprintf(buf, sizeof(buf), "7 Day Yield %.2f kWh", wh_7day / 1000.0);
+    lv_label_set_text(s_yield_7d_lbl, buf);
+    char upd[40];
+    snprintf(upd, sizeof(upd), "Last updated: %s", updated ? updated : "--:--");
+    lv_label_set_text(s_power_upd_lbl, upd);
+
+    /* lv_obj_align_to positions are one-shot: the value labels resize when
+     * their text changes, so re-run the unit alignment every update or the
+     * unit drifts into the digits (seen with kWh at "10.00"). */
+    lv_obj_align_to(s_power_unit_lbl, s_power_val_lbl,
+                    LV_ALIGN_OUT_RIGHT_BOTTOM, 12, -14);
+    lv_obj_align_to(s_yield_unit_lbl, s_yield_val_lbl,
+                    LV_ALIGN_OUT_RIGHT_BOTTOM, 12, -14);
+}
+
+/* Single 1 Hz apply tick: clock, chart now-line and everything the data
+ * layer buffered since the last tick — one dirty region set, one frame. */
+static void coalesce_timer_cb(lv_timer_t *)
 {
     time_t now = time(nullptr);
     struct tm tmbuf;
@@ -636,9 +707,29 @@ static void clock_timer_cb(lv_timer_t *)
     char buf[16];
     strftime(buf, sizeof(buf), "%H:%M:%S", &tmbuf);
     lv_label_set_text(clock_label, buf);
-}
 
-static void now_timer_cb(lv_timer_t *) { update_now_line(); }
+    update_now_line();
+
+    if (s_pend_solar.pending) {
+        apply_solar(s_pend_solar.watts_now, s_pend_solar.wh_today,
+                    s_pend_solar.watts_peak, s_pend_solar.wh_7day,
+                    s_pend_solar.updated);
+        s_pend_solar.pending = false;
+    }
+    if (s_pend_chart_pending) {
+        apply_chart(s_pend_chart);
+        s_pend_chart_pending = false;
+    }
+    if (s_pend_link.pending) {
+        if (s_link_pill) {
+            if (s_pend_link.up)
+                lv_obj_add_flag(s_link_pill, LV_OBJ_FLAG_HIDDEN);
+            else
+                lv_obj_clear_flag(s_link_pill, LV_OBJ_FLAG_HIDDEN);
+        }
+        s_pend_link.pending = false;
+    }
+}
 
 void dashboard_ui_init(void)
 {
@@ -673,8 +764,7 @@ void dashboard_ui_init(void)
     /* GitHub tab intentionally empty (design only) */
 
     select_tab(0);
-    lv_timer_create(clock_timer_cb, 1000, NULL);
-    lv_timer_create(now_timer_cb, 1000, NULL);
+    lv_timer_create(coalesce_timer_cb, 1000, NULL);
 }
 
 /* switch tabs programmatically (used by the host simulator; harmless on HW) */
@@ -690,32 +780,28 @@ void dashboard_ui_set_pr_count(uint32_t count, const char *note)
     (void)note;
 }
 
+/* link-state hook from push_client: up=true hides the pill (stream live),
+ * up=false shows it. Buffers only — applied by the 1 Hz coalesce timer,
+ * so a transition costs no extra frame. Must be called with the LVGL
+ * adapter lock held (same contract as dashboard_ui_set_solar). */
+void dashboard_ui_set_link(bool up)
+{
+    s_pend_link.pending = true;
+    s_pend_link.up = up;
+}
+
+/* Public setter: buffers only — applied by the 1 Hz coalesce timer, so
+ * a push line invalidates the screen at most once per second total.
+ * Call under the LVGL adapter lock (see dashboard_ui.h). */
 void dashboard_ui_set_solar(uint32_t watts_now, uint32_t wh_today,
                              uint32_t watts_peak, uint32_t wh_7day,
                              const char *updated)
 {
-    /* 32 covers the longest possible string over the full uint32 range:
-     * "7 Day Yield 4294967.29 kWh" (27) — exact-fit buffers clipped the
-     * unit before (buf[20] with "7 Day Yield 142.73 kWh"), so this is a
-     * class-kill, not another exact fit */
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%.2f", watts_now / 1000.0);
-    lv_label_set_text(s_power_val_lbl, buf);
-    snprintf(buf, sizeof(buf), "%.2f", wh_today / 1000.0);
-    lv_label_set_text(s_yield_val_lbl, buf);
-    snprintf(buf, sizeof(buf), "Peak %.2f kW", watts_peak / 1000.0);
-    lv_label_set_text(s_power_peak_lbl, buf);
-    snprintf(buf, sizeof(buf), "7 Day Yield %.2f kWh", wh_7day / 1000.0);
-    lv_label_set_text(s_yield_7d_lbl, buf);
-    char upd[40];
-    snprintf(upd, sizeof(upd), "Last updated: %s", updated ? updated : "--:--");
-    lv_label_set_text(s_power_upd_lbl, upd);
-
-    /* lv_obj_align_to positions are one-shot: the value labels resize when
-     * their text changes, so re-run the unit alignment every update or the
-     * unit drifts into the digits (seen with kWh at "10.00"). */
-    lv_obj_align_to(s_power_unit_lbl, s_power_val_lbl,
-                    LV_ALIGN_OUT_RIGHT_BOTTOM, 12, -14);
-    lv_obj_align_to(s_yield_unit_lbl, s_yield_val_lbl,
-                    LV_ALIGN_OUT_RIGHT_BOTTOM, 12, -14);
+    s_pend_solar.watts_now  = watts_now;
+    s_pend_solar.wh_today   = wh_today;
+    s_pend_solar.watts_peak = watts_peak;
+    s_pend_solar.wh_7day    = wh_7day;
+    snprintf(s_pend_solar.updated, sizeof(s_pend_solar.updated), "%s",
+             updated ? updated : "--:--");
+    s_pend_solar.pending = true;
 }
