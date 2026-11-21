@@ -499,3 +499,59 @@ DMA (GHOSTING_INVESTIGATION §8) — ~450–500 ms per render. Two renders/s
 saturate the LVGL task. Coalescing was already at the app's floor; the
 remaining lever is the transport (partial refresh with internal draw
 buffers, or a tear-free hybrid) — decision pending.
+
+## 2026-11-21: Step 0 baseline — system-wide run-time stats (`diag/rtos-stats`)
+
+Measured with `uxTaskGetSystemState` two-snapshot diffs over a 30 s window
+(new branch `diag/rtos-stats`: serial `stats` command, capture tool
+`firmware/tools/rtos_stats_capture.py`, raw capture
+`docs/rtos_stats_baseline_2026-11-21.txt`). The prebuilt Arduino core
+(IDF 5.5.5) already ships `CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y`
+(esp_timer timebase), so no sdkconfig change was needed. The c99 probes
+(cherry-picked from `diag/cpu-probes`) ran in the same window for the
+wall-clock vs running-time comparison. Push stream LINKED, steady state;
+two runs agreed within ~2% per-task.
+
+Baseline (window 30.2 s, 12 tasks; run 2 of 2):
+
+| task | core | run ms | % of its core |
+|---|---|---|---|
+| IDLE0 | 0 | 29,211 | 96.6% |
+| lvgl | 1 | 28,311 | 93.7% |
+| IDLE1 | 1 | 1,220 | 4.0% |
+| loopTask | 1 | 711 | 2.4% |
+| esp_timer | 0 | 583 | 1.9% |
+| wifi | 0 | 349 | 1.2% |
+| tiT (lwIP) | 0 | 98 | 0.3% |
+| ipc0/1, sys_evt, arduino_events, Tmr Svc | – | 0 | 0% |
+
+(c99 in the same window: flush 2/s, handlerBusy ≈ 99% wall.)
+
+Findings:
+
+- **Nothing is starving.** Core 0 is 96.6% IDLE (radio + lwIP + timers ≈
+  3.4% combined). The entire ~99% headline lives on core 1, inside the
+  lvgl task. Urgency verdict: this is headroom work, not rescue.
+- **The 99% is real running time, not blocked time.** lvgl ran 93.7% of
+  wall while c99 measured ≈ 99% wall busy → the blocked-vsync slice
+  (`ulTaskNotifyTake` in `flush_cb`) is ~5% — matching IDLE1's 4% share
+  (2 waits/s × ~20 ms ≈ half a ~36 ms frame at the 13 MHz PCLK floor).
+  The load is PSRAM-stall cycles (CPU executing), as GHOSTING §8 said.
+- **Push stack verified ≈ free:** loopTask 2.4% (JSON parse + heartbeat +
+  setter calls), wifi 1.2%, lwIP timer 0.3%. The post-rearchitecture belief
+  was correct.
+- **Surprise:** the 2 ms LVGL tick esp_timer costs ~1.9% of a core
+  (esp_timer task, 500 wakeups/s). Cheap future lever (raise the tick
+  period); low priority — it lands on the idle-rich core.
+- **loopTask cadence is stretched ~4×** (prio 1 under lvgl's prio 2 on the
+  same core): the c99 10-pass window measures 3.8–4.5 s, so push lines are
+  drained in ~2-line bursts every ~400 ms. Harmless (15 s staleness
+  watchdog), but it answers any future "why does loop() tick at 2.5 Hz".
+- **Stack high-water marks healthy:** lvgl 7.7 KB free of 12 KB, loopTask
+  5.5 KB.
+
+Implications for PERFORMANCE.md: Step 1 (perf monitor off) should take
+lvgl to ~47% running / IDLE1 ~53% — directly measurable with this harness
+before/after. The flush 2/s steady state with push data buffer-only stays
+consistent with the corrected Step 1 attribution (the perf monitor's own
+label, not the push-data cycle — see PERFORMANCE.md).
