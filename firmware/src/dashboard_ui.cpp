@@ -218,6 +218,7 @@ static lv_obj_t *s_yield_val_lbl = nullptr;   /* TOTAL YIELD card value (kWh) */
 static lv_obj_t *s_yield_7d_lbl = nullptr;    /* 7 Day Yield bottom stat (kWh) */
 static lv_obj_t *s_yield_unit_lbl = nullptr;  /* kWh unit; re-aligned each update */
 static lv_obj_t *s_power_upd_lbl = nullptr;  /* last-updated pill label */
+static lv_obj_t *s_link_pill = nullptr;      /* header NETWORK LOST pill */
 
 /* GitHub tab is design-only for now — hidden until it gets real data. */
 #define GITHUB_TAB_ENABLED 0
@@ -406,6 +407,13 @@ static void build_header(lv_obj_t *scr)
         lv_obj_set_style_border_width(bar, 0, 0);
         lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     }
+
+    /* --- network-lost alert pill: shown whenever the push link is down,
+     * left of the (decorative) signal bars; hidden once LINKED --- */
+    s_link_pill = make_pill(header, "NETWORK LOST", danger(), opa_tint_14,
+                            true, danger_tint(), FONT_BODY);
+    lv_obj_align(s_link_pill, LV_ALIGN_RIGHT_MID, -170, 0);  /* right edge x≈630; bars start 635 */
+    lv_obj_add_flag(s_link_pill, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *clk = lv_obj_create(header);
     lv_obj_set_size(clk, 118, 32);
@@ -688,6 +696,17 @@ void dashboard_ui_set_pr_count(uint32_t count, const char *note)
 {
     (void)count;
     (void)note;
+}
+
+/* link-state hook from push_client: up=true hides the pill (stream live),
+ * up=false shows it. Flag toggles only — no allocations, no relayout of
+ * other objects. Must be called with the LVGL adapter lock held (same
+ * contract as dashboard_ui_set_solar). */
+void dashboard_ui_set_link(bool up)
+{
+    if (!s_link_pill) return;
+    if (up) lv_obj_add_flag(s_link_pill, LV_OBJ_FLAG_HIDDEN);
+    else    lv_obj_clear_flag(s_link_pill, LV_OBJ_FLAG_HIDDEN);
 }
 
 void dashboard_ui_set_solar(uint32_t watts_now, uint32_t wh_today,

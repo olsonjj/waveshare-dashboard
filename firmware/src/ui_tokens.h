@@ -37,6 +37,8 @@ inline lv_color_t green_tint(void)      { return lv_color_hex(0x0F2A20); }  /* g
 inline lv_color_t yellow(void)          { return lv_color_hex(0xFACC15); }  /* gradient bar end     */
 inline lv_color_t cyan(void)            { return lv_color_hex(0x38BDF8); }  /* "now" / sync marker  */
 inline lv_color_t cyan_tint(void)       { return lv_color_hex(0x0C2233); }  /* tooltip fill         */
+inline lv_color_t danger(void)          { return lv_color_hex(0xF87171); }  /* alert / network lost */
+inline lv_color_t danger_tint(void)     { return lv_color_hex(0x2A1210); }  /* red-tinted fill      */
 inline lv_color_t violet(void)          { return lv_color_hex(0xA78BFA); }  /* web / commits (rsvd) */
 
 /* -------- 3. semantic aliases -------- */
@@ -44,6 +46,7 @@ inline lv_color_t violet(void)          { return lv_color_hex(0xA78BFA); }  /* w
 inline lv_color_t color_power(void)     { return solar_amber(); }
 inline lv_color_t color_yield(void)     { return green(); }
 inline lv_color_t color_now(void)       { return cyan(); }
+inline lv_color_t color_alert(void)     { return danger(); }
 inline lv_color_t color_github(void)    { return green(); }   /* repos pill, active gh tab */
 
 /* -------- radii -------- */

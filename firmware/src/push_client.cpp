@@ -197,6 +197,26 @@ static void feed_byte(uint8_t c)
     line_buf[line_len++] = (char)c;
 }
 
+/* ---------- link-state reporting (header NETWORK LOST pill) ---------- */
+
+/* Mirror link transitions to the UI, edge-triggered: one bounded-lock UI
+ * call per transition, nothing per-second. Starts "reported up" so the
+ * very first failed tick shows the pill (at boot the pill exists but is
+ * hidden — dashboard_ui_init runs before the tick loop). */
+static bool link_reported = true;
+
+static void report_link(bool up)
+{
+    if (up == link_reported) return;
+    link_reported = up;
+    if (esp_lv_adapter_lock(pdMS_TO_TICKS(5000)) == ESP_OK) {
+        dashboard_ui_set_link(up);
+        esp_lv_adapter_unlock();
+    } else {
+        Serial.println("[push] ui lock TIMEOUT - link pill update skipped");
+    }
+}
+
 /* ---------- public API ---------- */
 
 void push_client_init(void)
@@ -231,7 +251,7 @@ void push_client_tick(void)
 {
     switch (state) {
     case WIFI_DISABLED:
-        return;
+        break;
 
     case WIFI_CONNECTING:
         if (WiFi.status() == WL_CONNECTED) {
@@ -303,4 +323,7 @@ void push_client_tick(void)
         }
         break;
     }
+
+    /* every exit path: reflect LINKED vs not-LINKED on the header pill */
+    report_link(state == LINKED);
 }
