@@ -279,10 +279,14 @@
  *-----------*/
 
 /*1: Show CPU usage and FPS count*/
-#define LV_USE_PERF_MONITOR 1   /* 1: sys-layer FPS/CPU overlay, bottom-right —
-                                 * back on per user request. Was 0 for the
-                                 * workload-minimal ghost diagnosis (2026-11-19);
-                                 * originally 1 from Waveshare defaults. */
+/* NOTE: this file has a twin at lib/lv_conf.h (library builds resolve THAT
+ * copy — see the note there); keep the two in sync. */
+#ifndef LV_USE_PERF_MONITOR
+#define LV_USE_PERF_MONITOR 1   /* 1: sys-layer FPS/CPU overlay (bottom-right) —
+                                 * on per user request; overridable from
+                                 * platformio.ini build_flags. Was 0 for the
+                                 * workload-minimal ghost diagnosis (2026-11-19). */
+#endif
 #if LV_USE_PERF_MONITOR
     #define LV_USE_PERF_MONITOR_POS LV_ALIGN_BOTTOM_RIGHT
 #endif
