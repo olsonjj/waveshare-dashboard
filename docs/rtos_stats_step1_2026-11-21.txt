@@ -1,0 +1,73 @@
+solar dashboard start
+[s1] board created
+[I][Panel][esp_panel_board.cpp:0066](init): Initializing board (Waveshare:ESP32-S3-Touch-LCD-7)
+[I][Panel][esp_panel_board.cpp:0235](init): Board initialize success
+[s2] board init done
+[I][Panel][esp_panel_board.cpp:0253](begin): Beginning board (Waveshare:ESP32-S3-Touch-LCD-7)
+[I][Expander][esp_io_expander_ch422g.c:0075](esp_io_expander_new_i2c_ch422g): version: 0.1.0
+[I][Panel][esp_lcd_touch_gt911.c:0067](esp_lcd_touch_new_i2c_gt911): version: 1.1.1
+[W][Panel][esp_lcd_touch_gt911.c:0144](esp_lcd_touch_new_i2c_gt911): Unable to initialize the I2C address
+[I][Panel][esp_lcd_touch_gt911.c:0401](touch_gt911_read_cfg): TouchPad_ID:0x39,0x31,0x31
+[I][Panel][esp_lcd_touch_gt911.c:0402](touch_gt911_read_cfg): TouchPad_Config_Version:88
+[I][Panel][esp_panel_board.cpp:0463](begin): Board begin success
+[s3] board begin done (LCD+bus configured)
+[s4] adapter started
+[push] connecting to "YapioHome", push server 192.168.182.147:8421...
+solar dashboard ready[push] WiFi connected, IP: 192.168.182.112
+
+[push] connecting to push server...
+[push] linked — reading 1 s push stream
+[DEBUG-c99] 1697ms: flush 1/s touchPressed 0/s handlerBusy 47% calls 20/s
+[DEBUG-c99] 1305ms: flush 0/s touchPressed 0/s handlerBusy 31% calls 24/s
+[DEBUG-c99] 1692ms: flush 1/s touchPressed 0/s handlerBusy 46% calls 20/s
+[DEBUG-c99] 1306ms: flush 0/s touchPressed 0/s handlerBusy 31% calls 24/s
+[DEBUG-c99] 1700ms: flush 1/s touchPressed 0/s handlerBusy 46% calls 20/s
+[DEBUG-c99] 1303ms: flush 0/s touchPressed 0/s handlerBusy 33% calls 24/s
+[DEBUG-c99] 1693ms: flush 1/s touchPressed 0/s handlerBusy 45% calls 20/s
+[DEBUG-c99] 1327ms: flush 0/s touchPressed 0/s handlerBusy 32% calls 24/s
+[DEBUG-c99] 1681ms: flush 1/s touchPressed 0/s handlerBusy 45% calls 20/s
+[DEBUG-c99] 1411ms: flush 0/s touchPressed 0/s handlerBusy 28% calls 25/s
+[DEBUG-c99] 1589ms: flush 1/s touchPressed 0/s handlerBusy 51% calls 18/s
+[DEBUG-c99] 1405ms: flush 0/s touchPressed 0/s handlerBusy 28% calls 25/s
+[DEBUG-rtos] snapshot armed — 30000 ms delta window, workload continues
+[DEBUG-c99] 1696ms: flush 1/s touchPressed 0/s handlerBusy 47% calls 19/s
+[DEBUG-c99] 1806ms: flush 1/s touchPressed 0/s handlerBusy 47% calls 19/s
+[DEBUG-c99] 1390ms: flush 0/s touchPressed 0/s handlerBusy 29% calls 25/s
+[DEBUG-c99] 1687ms: flush 1/s touchPressed 0/s handlerBusy 47% calls 19/s
+[DEBUG-c99] 1318ms: flush 0/s touchPressed 0/s handlerBusy 32% calls 24/s
+[DEBUG-c99] 1678ms: flush 1/s touchPressed 0/s handlerBusy 47% calls 19/s
+[DEBUG-c99] 1322ms: flush 0/s touchPressed 0/s handlerBusy 32% calls 24/s
+[DEBUG-c99] 1705ms: flush 1/s touchPressed 0/s handlerBusy 46% calls 20/s
+[DEBUG-c99] 1402ms: flush 0/s touchPressed 0/s handlerBusy 28% calls 25/s
+[DEBUG-c99] 1695ms: flush 1/s touchPressed 0/s handlerBusy 47% calls 19/s
+[DEBUG-c99] 1919ms: flush 1/s touchPressed 0/s handlerBusy 47% calls 19/s
+[DEBUG-c99] 1786ms: flush 1/s touchPressed 0/s handlerBusy 45% calls 20/s
+[DEBUG-c99] 1410ms: flush 0/s touchPressed 0/s handlerBusy 30% calls 25/s
+[DEBUG-c99] 1788ms: flush 1/s touchPressed 0/s handlerBusy 47% calls 19/s
+[DEBUG-c99] 1817ms: flush 1/s touchPressed 0/s handlerBusy 45% calls 20/s
+[DEBUG-c99] 1409ms: flush 0/s touchPressed 0/s handlerBusy 31% calls 25/s
+[DEBUG-c99] 1677ms: flush 1/s touchPressed 0/s handlerBusy 47% calls 19/s
+[DEBUG-c99] 1388ms: flush 0/s touchPressed 0/s handlerBusy 29% calls 25/s
+[DEBUG-rtos] window 30080 ms, tasks 12, running core-time 60164 ms (2 cores, 100% accounted)
+[DEBUG-rtos] core0: IDLE 96.65%, tasks 3.35%
+[DEBUG-rtos] core1: IDLE 58.42%, tasks 41.58%
+[DEBUG-rtos] task             core pct      run_ms  stkFree(B)
+[DEBUG-rtos] IDLE0             0  48.32   29073  236
+[DEBUG-rtos] IDLE1             1  29.20   17573  356
+[DEBUG-rtos] lvgl              1  19.54   11757  7760
+[DEBUG-rtos] loopTask          1  1.24     751  5548
+[DEBUG-rtos] esp_timer         0  0.73     444  7732
+[DEBUG-rtos] wifi              0  0.72     436  4096
+[DEBUG-rtos] tiT               0  0.21     127  2880
+[DEBUG-rtos] ipc1              1  0.00       0  1100
+[DEBUG-rtos] sys_evt           0  0.00       0  2696
+[DEBUG-rtos] arduino_events    1  0.00       0  1576
+[DEBUG-rtos] ipc0              0  0.00       0  1284
+[DEBUG-rtos] Tmr Svc           -1  0.00       0  2428
+[DEBUG-c99] 1699ms: flush 1/s touchPressed 0/s handlerBusy 46% calls 20/s
+[DEBUG-c99] 1316ms: flush 0/s touchPressed 0/s handlerBusy 32% calls 24/s
+[DEBUG-c99] 1699ms: flush 1/s touchPressed 0/s handlerBusy 46% calls 20/s
+[DEBUG-c99] 1402ms: flush 0/s touchPressed 0/s handlerBusy 28% calls 25/s
+[DEBUG-c99] 1695ms: flush 1/s touchPressed 0/s handlerBusy 47% calls 19/s
+[DEBUG-c99] 1819ms: flush 1/s touchPressed 0/s handlerBusy 45% calls 20/s
+[DEBUG-c99] 1387ms: flush 0/s touchPressed 0/s handlerBusy 31% calls 24/s

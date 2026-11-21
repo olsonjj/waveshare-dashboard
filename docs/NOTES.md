@@ -555,3 +555,57 @@ lvgl to ~47% running / IDLE1 ~53% — directly measurable with this harness
 before/after. The flush 2/s steady state with push data buffer-only stays
 consistent with the corrected Step 1 attribution (the perf monitor's own
 label, not the push-data cycle — see PERFORMANCE.md).
+
+## 2026-11-21: Step 1 measured — perf monitor off (`feat/perf-monitor-off`)
+
+`LV_USE_PERF_MONITOR 0` in both `lv_conf.h` copies (branch
+`feat/perf-monitor-off`). Measured with the Step 0 harness (branch
+`diag/step1-measure` = feat + diag probes; raw capture
+`docs/rtos_stats_step1_2026-11-21.txt`), same steady-state conditions as
+the baseline (push stream LINKED, 30 s windows, two runs within <1%).
+
+Before/after (task run-time deltas, 30 s window):
+
+| | baseline (monitor on) | Step 1 (monitor off) |
+|---|---|---|
+| flush (full-screen renders) | 2/s | **~1/s** |
+| lvgl running | 28,311 ms (**93.7%**) | 11,831 ms (**39.3%**) |
+| IDLE1 (LVGL core) | 4.0% | **58.2%** |
+| IDLE0 | 96.6% | 96.7–97.5% |
+| handlerBusy (c99, wall) | ~99% | ~41% avg |
+| loopTask | 2.4% | 2.5% |
+
+Prediction check: expected ~99% → ~50% busy; measured 39% running / ~41%
+wall (renders measure ~410 ms in this build; slightly better than the
+~470 ms baseline). The second render was indeed the perf monitor's own
+label — flush dropped to the 1 Hz coalesce rate exactly, confirming the
+Step 1 diagnosis over the old "push-data cycle" attribution.
+
+Secondary effects:
+- `lv_timer_handler()` call rate rose 2/s → ~20/s (worker now wakes at
+  the 20 ms refresh-timer cadence; each no-op pass is sub-ms — the
+  ~30%/50% alternation in the c99 1-s windows is render-phasing, not
+  extra load; the rtos totals show quick-pass cost ≈ 0).
+- loopTask cadence improved from ~4× to ~1.4× stretch (prio 1 still
+  yields to lvgl's render passes, but only 1/s now).
+- esp_timer cost dropped 583 → 431 ms/30 s (fewer scheduler wakeups
+  under lighter load; not chased further).
+
+Ghost-artifact watch, honestly: glitch_watch.py needs the stripped
+SNAPSHOT/LVSNAP dump commands (not in this build), and cam_watch.py's
+webcam rig is connected but not aimed at the panel (two frames 60 s
+apart are pixel-identical; the live dashboard ticks every second) — so
+no automated visual check ran. Risk argument: Step 1 only *reduces*
+write traffic into the scan path (2 full-screen renders/s → 1/s); it
+changes nothing about PCLK, buffer config, or the write mechanism — the
+ghost levers named in PERFORMANCE.md Step 2. Residual risk near zero,
+but the record should say "pending an eyeball on the panel".
+
+**Verdict — Step 1 target met with margin** (IDLE1 58% ≥ the 50%
+criterion), and the judgment call: **stop here for now.** Nothing
+starves (core 0 ~97% IDLE, core 1 58% IDLE), renders are bounded at the
+app's true 1 Hz floor, and Step 2's remaining justification —
+interaction latency (~0.4 s full-screen render per touch) and future
+bus headroom — is quality work, not rescue, per PERFORMANCE.md §4.
+Triggers to revisit Step 2: touch latency actually bothers a user, or a
+new bus user appears (audio, camera, heavier UI).

@@ -1,5 +1,9 @@
 # Performance plan: reducing the LVGL task from ~99% CPU
 
+**Status (2026-11-21):** Step 0 ✅ done · **Step 1 ✅ done — target met with
+margin (IDLE1 58% ≥ 50%) — judgment call: stop here for now; Steps 2–3
+deferred (decision + triggers in Step 1 results, below).**
+
 **Written:** 2026-11-20 (planning for the next work session — pick up here)
 **Revised:** post-review — Step 1 re-diagnosed (the second render is the
 perf monitor, not the push-data cycle), Step 2 buffer sizing and the Step 4
@@ -131,7 +135,7 @@ Verdict for the plan: Steps 2–3 are headroom work, not rescue — exactly
 §4's framing. Step 1 remains first, now with a measurable target: lvgl
 ~94% → ~47% running, IDLE1 4% → ~53%.
 
-### Step 1 — Cheap win: turn the perf monitor off (it IS the second render)
+### Step 1 — Cheap win: turn the perf monitor off (it IS the second render) — DONE 2026-11-21
 
 **Corrected diagnosis.** An earlier version of this step said "coalesce
 the push-data update into the tick" — but that already happens
@@ -169,6 +173,31 @@ still show it. One line, in each `lv_conf.h` copy.
 the busy-% drop. Decision point: if ~50% busy (wall-clock, of which part
 is blocked-vsync — see Step 0) is acceptable for the foreseeable future,
 Steps 2+ become optional quality work instead of urgent fixes.
+
+**Results (measured 2026-11-21 — done).** `LV_USE_PERF_MONITOR 0` in both
+lv_conf.h copies, branch `feat/perf-monitor-off`; measured via branch
+`diag/step1-measure` (feat + diag harness); raw capture
+`docs/rtos_stats_step1_2026-11-21.txt`; full before/after in NOTES.md
+§2026-11-21. Headline: flush 2/s → **~1/s** (the coalesce floor — the
+monitor diagnosis confirmed), lvgl running 93.7% → **39.3%** (two runs
+<1% apart), IDLE1 4% → **58.2%**, c99 wall busy ~99% → **~41%**,
+core-0 unchanged (~97% IDLE). Success criterion "≥50% IDLE on the LVGL
+core" — met with margin. One honest gap: no automated visual check ran
+(glitch_watch needs the stripped SNAPSHOT/LVSNAP commands; the webcam
+rig isn't aimed at the panel) — risk is near nil since Step 1 only
+*reduces* write traffic into the scan path, but eyeball the panel when
+convenient.
+
+**Decision (judgment call, recorded 2026-11-21): do NOT proceed to
+Step 2 now.** Nothing starves; renders sit at the app's true 1 Hz
+floor; §4's defensible-endpoint argument is now measurement-backed.
+Step 2 remains the known fix with a written plan, triggered by either:
+- touch latency actually bothering a user (~0.4 s full-screen render
+  per interaction — the one cost Step 1 cannot touch), or
+- a new PSRAM-bus user appearing (audio, camera, heavier UI).
+Until one of those fires, the cost/risk of Step 2 (tearing on a panel
+with a scan-path marginality history, SRAM budget that doesn't fit the
+stubbed two-buffer path) buys headroom nobody currently needs.
 
 ### Step 2 — The real fix: partial refresh with internal-RAM draw buffers
 
@@ -259,10 +288,9 @@ Verify rather than assume:
 ## 3. Success criteria
 
 - `lv_timer_handler()` busy time within a **healthy bound** (target: idle
-  dashboard leaves ≥50% IDLE on the LVGL core after Step 1, ≥80% after
-  Step 2 — refine once Step 0 gives the real numbers). Note: Step 1's
-  monitor-off fix may already meet the Step 1 target, so re-baseline
-  before setting Step 2's bar.
+  dashboard leaves ≥50% IDLE on the LVGL core after Step 1 — **MET:
+  58.2% (2026-11-21)**; ≥80% after Step 2 — deferred, see Step 1
+  decision).
 - Interaction (tab switch, touch) latency unchanged or better (NOTES.md
   baseline: judge by interaction responsiveness, not FPS on static content).
 - No recurrence of the scan-path ghost artifact with `glitch_watch.py`
@@ -299,4 +327,5 @@ for a future bus user, not about rescuing anything broken today.
   matrix; `firmware/tools/glitch_watch.py` — bring-up watch
 - `diag/rtos-stats` branch — Step 0 tool: serial `stats` → 30 s run-time-stats
   diff (c99 probes included; `tools/rtos_stats_capture.py` captures);
+  `diag/step1-measure` — the Step 1 verification build (feat + harness);
   `diag/cpu-probes` branch — the original c99 probe
