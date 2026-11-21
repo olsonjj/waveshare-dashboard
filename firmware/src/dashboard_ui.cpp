@@ -244,18 +244,23 @@ static lv_obj_t *s_bucket_bar[N_BUCKETS];   /* bottom-anchored bar objects */
 static lv_obj_t *s_y_lbl[N_YLBL];           /* y-axis labels (text only)  */
 static lv_obj_t *s_now_line;               /* current-time marker (2 px) */
 
-/* Position the current-time line: x = fraction of the day elapsed,
- * floored to the most recent 15-minute mark that has passed. Called
- * from a 60-s lv_timer and once at chart build. */
+/* Position the current-time line so it tracks the current 15-minute
+ * bucket's amber bar, using the same geometry as build_chart_card().
+ * The marker is 2 px and left-anchored; it sweeps flush inside the 5-px
+ * bar — its left edge on the bar's left edge at m = 0, its right edge on
+ * the bar's right edge at m = 14. Called from a 1-s lv_timer and once
+ * at chart build. */
 static void update_now_line(void)
 {
     if (!s_now_line) return;
     time_t now = time(nullptr);
     struct tm tmbuf;
     localtime_r(&now, &tmbuf);
-    int mins = tmbuf.tm_hour * 60 + tmbuf.tm_min;
-    mins = mins / 15 * 15;                    /* floor to passed 15-min mark */
-    int x = PAD_L + mins * PLOT_W / (24 * 60);
+    int tod = tmbuf.tm_hour * 60 + tmbuf.tm_min;   /* minutes since midnight */
+    int bucket = tod / 15;                          /* bucket index 0..95 */
+    int m = tod % 15;                               /* minutes into block */
+    int bar_left = PAD_L + bucket * BAR_SLOT + (BAR_SLOT - BAR_W) / 2;
+    int x = bar_left + m * (BAR_W - 2) / 14;        /* flush inside the bar */
     lv_obj_set_pos(s_now_line, x, PAD_T);
 }
 
@@ -669,7 +674,7 @@ void dashboard_ui_init(void)
 
     select_tab(0);
     lv_timer_create(clock_timer_cb, 1000, NULL);
-    lv_timer_create(now_timer_cb, 60000, NULL);
+    lv_timer_create(now_timer_cb, 1000, NULL);
 }
 
 /* switch tabs programmatically (used by the host simulator; harmless on HW) */
