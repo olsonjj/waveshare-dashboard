@@ -592,10 +592,8 @@ Secondary effects:
   under lighter load; not chased further).
 
 Ghost-artifact watch, honestly: glitch_watch.py needs the stripped
-SNAPSHOT/LVSNAP dump commands (not in this build), and cam_watch.py's
-webcam rig is connected but not aimed at the panel (two frames 60 s
-apart are pixel-identical; the live dashboard ticks every second) — so
-no automated visual check ran. Risk argument: Step 1 only *reduces*
+SNAPSHOT/LVSNAP dump commands (not in this build), so no automated
+visual check ran. Risk argument: Step 1 only *reduces*
 write traffic into the scan path (2 full-screen renders/s → 1/s); it
 changes nothing about PCLK, buffer config, or the write mechanism — the
 ghost levers named in PERFORMANCE.md Step 2. Residual risk near zero,

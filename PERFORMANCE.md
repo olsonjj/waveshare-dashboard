@@ -183,10 +183,9 @@ monitor diagnosis confirmed), lvgl running 93.7% → **39.3%** (two runs
 <1% apart), IDLE1 4% → **58.2%**, c99 wall busy ~99% → **~41%**,
 core-0 unchanged (~97% IDLE). Success criterion "≥50% IDLE on the LVGL
 core" — met with margin. One honest gap: no automated visual check ran
-(glitch_watch needs the stripped SNAPSHOT/LVSNAP commands; the webcam
-rig isn't aimed at the panel) — risk is near nil since Step 1 only
-*reduces* write traffic into the scan path, but eyeball the panel when
-convenient.
+(glitch_watch needs the stripped SNAPSHOT/LVSNAP commands, absent from
+this build) — risk is near nil since Step 1 only *reduces* write
+traffic into the scan path, but eyeball the panel when convenient.
 
 **Decision (judgment call, recorded 2026-11-21): do NOT proceed to
 Step 2 now.** Nothing starves; renders sit at the app's true 1 Hz
