@@ -10,7 +10,7 @@
  *
  * Periodic work on this board, in full:
  *   - LVGL tick timer (framework) + render/flush of invalidated regions
- *   - clock label (1 s), chart now-line (60 s)          [dashboard_ui]
+ *   - clock label (1 s), chart now-line (1 s)           [dashboard_ui]
  *   - push stream: read+parse one ~900 B JSON line, update labels/bars,
  *     small redraw + flush (1 s)                        [push_client]
  *   - [hb] heartbeat printf every ~5 s (4 KB TX ring — never spin-waits)

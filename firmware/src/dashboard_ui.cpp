@@ -248,7 +248,7 @@ static lv_obj_t *s_now_line;               /* current-time marker (2 px) */
  * bucket's amber bar, using the same geometry as build_chart_card().
  * The marker is 2 px and left-anchored; it sweeps flush inside the 5-px
  * bar — its left edge on the bar's left edge at m = 0, its right edge on
- * the bar's right edge at m = 14. Called from a 60-s lv_timer and once
+ * the bar's right edge at m = 14. Called from a 1-s lv_timer and once
  * at chart build. */
 static void update_now_line(void)
 {
@@ -674,7 +674,7 @@ void dashboard_ui_init(void)
 
     select_tab(0);
     lv_timer_create(clock_timer_cb, 1000, NULL);
-    lv_timer_create(now_timer_cb, 60000, NULL);
+    lv_timer_create(now_timer_cb, 1000, NULL);
 }
 
 /* switch tabs programmatically (used by the host simulator; harmless on HW) */
