@@ -200,21 +200,29 @@ static void feed_byte(uint8_t c)
 /* ---------- link-state reporting (header NETWORK LOST pill) ---------- */
 
 /* Mirror link transitions to the UI, edge-triggered: one bounded-lock UI
- * call per transition, nothing per-second. Starts "reported up" so the
- * very first failed tick shows the pill (at boot the pill exists but is
- * hidden — dashboard_ui_init runs before the tick loop). */
+ * call per transition, nothing per-second.
+ *
+ * Retry contract: link_reported is committed only AFTER the UI update
+ * succeeds. If the 5 s lock times out the edge is not consumed, so the
+ * next ~100 ms tick retries — a "lost" transition can never be dropped.
+ *
+ * WIFI_CONNECTING is reported as up (radio handshake in progress): a
+ * normal boot passes through it in ~1 s before SOCK_TRYING, so the pill
+ * doesn't flash at boot; if the handshake fails, WIFI_BACKOFF reports
+ * lost and the pill appears. Any other non-LINKED state (socket refused,
+ * stream dropped/stale, no credentials) reports lost. */
 static bool link_reported = true;
 
 static void report_link(bool up)
 {
     if (up == link_reported) return;
-    link_reported = up;
-    if (esp_lv_adapter_lock(pdMS_TO_TICKS(5000)) == ESP_OK) {
-        dashboard_ui_set_link(up);
-        esp_lv_adapter_unlock();
-    } else {
-        Serial.println("[push] ui lock TIMEOUT - link pill update skipped");
+    if (esp_lv_adapter_lock(pdMS_TO_TICKS(5000)) != ESP_OK) {
+        Serial.println("[push] ui lock TIMEOUT - link pill update retried next tick");
+        return;   /* edge NOT consumed — retry on the next tick */
     }
+    dashboard_ui_set_link(up);
+    esp_lv_adapter_unlock();
+    link_reported = up;
 }
 
 /* ---------- public API ---------- */
@@ -324,6 +332,8 @@ void push_client_tick(void)
         break;
     }
 
-    /* every exit path: reflect LINKED vs not-LINKED on the header pill */
-    report_link(state == LINKED);
+    /* every exit path: reflect link health on the header pill
+     * (LINKED counts as up; the in-progress Wi-Fi handshake is tolerated
+     * so a normal boot doesn't flash; every other state reports lost) */
+    report_link(state == LINKED || state == WIFI_CONNECTING);
 }

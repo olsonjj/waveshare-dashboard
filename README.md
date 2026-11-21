@@ -116,8 +116,10 @@ arduino-esp32 core (3.3.13+) ship the fix upstream (it's already on
 - [x] Rust test suite (`just test`, 29 cases): bucket accumulator
       (straddle/gap/rollover/peak — the ported Unity case list), payload
       contract, Envoy parser, SQLite round-trip, socket pusher cadence
-- [ ] Board reconnect/backoff hardening, offline indicator (out of scope
-      this version — if the push stops, the display keeps its last frame)
+- [x] Offline indicator: header "NETWORK LOST" pill driven by the board's
+      push-link state machine (shown when the link is refused/dropped/stale,
+      hidden once the 1 s stream resumes; the display keeps its last frame
+      until then)
 
 See [docs/NOTES.md](docs/NOTES.md) for the full record: board gotchas
 (CAN-muxed USB, UART slide switch, 16 MB flash override), the noise

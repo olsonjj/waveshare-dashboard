@@ -37,7 +37,8 @@ void dashboard_ui_set_solar(uint32_t watts_now, uint32_t wh_today,
 void dashboard_ui_set_chart(const float kwh[96]);
 
 /** Show/hide the header "NETWORK LOST" pill. up=true hides it (push link
- * established); up=false shows it (never connected, dropped, or stale).
+ * established, or the Wi-Fi handshake is still in progress at boot);
+ * up=false shows it (no credentials, refused, dropped, or stale).
  * Must be called with the LVGL adapter lock held (same contract as
  * dashboard_ui_set_solar). */
 void dashboard_ui_set_link(bool up);

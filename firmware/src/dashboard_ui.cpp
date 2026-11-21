@@ -410,7 +410,7 @@ static void build_header(lv_obj_t *scr)
 
     /* --- network-lost alert pill: shown whenever the push link is down,
      * left of the (decorative) signal bars; hidden once LINKED --- */
-    s_link_pill = make_pill(header, "NETWORK LOST", danger(), opa_tint_14,
+    s_link_pill = make_pill(header, "NETWORK LOST", color_alert(), opa_tint_14,
                             true, danger_tint(), FONT_BODY);
     lv_obj_align(s_link_pill, LV_ALIGN_RIGHT_MID, -170, 0);  /* right edge x≈630; bars start 635 */
     lv_obj_add_flag(s_link_pill, LV_OBJ_FLAG_HIDDEN);
