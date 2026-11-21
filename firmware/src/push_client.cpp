@@ -219,12 +219,13 @@ static void feed_byte(uint8_t c)
  *
  * WIFI_CONNECTING is reported as up only while boot_grace is set (the
  * first Wi-Fi handshake, i.e. at boot): a normal boot passes through it
- * in ~1 s before SOCK_TRYING, so the pill doesn't flash at boot; if the
- * handshake fails, WIFI_BACKOFF reports lost and the pill appears. After
- * the grace flag clears, a mid-run re-handshake (Wi-Fi dropped while
- * streaming) is an outage and reports lost immediately. Any other
- * non-LINKED state (socket refused, stream dropped/stale, no credentials)
- * reports lost. */
+ * in ~1 s before SOCK_TRYING, so the pill doesn't flash at boot.
+ * boot_grace clears on the first handshake COMPLETING (entering
+ * SOCK_TRYING) or the first handshake FAILING (the 10 s connect timeout
+ * → WIFI_BACKOFF), either way reporting lost — later handshakes after a
+ * mid-run drop are outages and alarm through the whole retry cycle.
+ * Any other non-LINKED state (socket refused, stream dropped/stale, no
+ * credentials) reports lost. */
 static bool link_reported = true;
 
 static void report_link(bool up)
@@ -283,6 +284,8 @@ void push_client_tick(void)
             next_action_ms = millis();          /* first connect attempt now */
         } else if (millis() - state_since_ms > WIFI_CONNECT_TIMEOUT_MS) {
             wifi_fail_count++;
+            boot_grace = false;   /* a FAILED handshake also ends the boot grace,
+                                   * so later handshakes alarm during backoff→retry */
             uint32_t wait = backoff_delay();
             Serial.printf("[push] WiFi connect attempt %lu failed — retry in %lu s\n",
                           (unsigned long)wifi_fail_count, (unsigned long)(wait / 1000));
