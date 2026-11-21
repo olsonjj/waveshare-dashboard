@@ -1,0 +1,34 @@
+solar dashboard ready[push] WiFi connected, IP: 192.168.182.112
+
+[push] connecting to push server...
+[push] linked — reading 1 s push stream
+[DEBUG-c99] 4224ms: flush 2/s touchPressed 0/s handlerBusy 91% calls 2/s
+[DEBUG-c99] 4449ms: flush 2/s touchPressed 0/s handlerBusy 107% calls 2/s
+[DEBUG-c99] 4543ms: flush 2/s touchPressed 0/s handlerBusy 91% calls 2/s
+[DEBUG-rtos] snapshot armed — 30000 ms delta window, workload continues
+[DEBUG-c99] 3815ms: flush 2/s touchPressed 0/s handlerBusy 109% calls 2/s
+[DEBUG-c99] 3753ms: flush 2/s touchPressed 0/s handlerBusy 99% calls 2/s
+[DEBUG-c99] 3911ms: flush 2/s touchPressed 0/s handlerBusy 99% calls 2/s
+[DEBUG-c99] 4510ms: flush 2/s touchPressed 0/s handlerBusy 99% calls 2/s
+[DEBUG-c99] 3816ms: flush 2/s touchPressed 0/s handlerBusy 99% calls 2/s
+[DEBUG-c99] 3785ms: flush 2/s touchPressed 0/s handlerBusy 99% calls 2/s
+[DEBUG-c99] 3912ms: flush 2/s touchPressed 0/s handlerBusy 99% calls 2/s
+[DEBUG-c99] 4224ms: flush 2/s touchPressed 0/s handlerBusy 99% calls 2/s
+[DEBUG-rtos] window 30242 ms, tasks 12, running core-time 60486 ms (2 cores, 100% accounted)
+[DEBUG-rtos] core0: IDLE 96.59%, tasks 3.41%
+[DEBUG-rtos] core1: IDLE 4.04%, tasks 95.96%
+[DEBUG-rtos] task             core pct      run_ms  stkFree(B)
+[DEBUG-rtos] IDLE0             0  48.29   29211  244
+[DEBUG-rtos] lvgl              1  46.80   28311  7752
+[DEBUG-rtos] IDLE1             1  2.01    1220  348
+[DEBUG-rtos] loopTask          1  1.17     711  5548
+[DEBUG-rtos] esp_timer         0  0.96     583  7724
+[DEBUG-rtos] wifi              0  0.57     349  4136
+[DEBUG-rtos] tiT               0  0.16      98  2880
+[DEBUG-rtos] ipc1              1  0.00       0  1108
+[DEBUG-rtos] sys_evt           0  0.00       0  2688
+[DEBUG-rtos] arduino_events    1  0.00       0  1424
+[DEBUG-rtos] ipc0              0  0.00       0  1276
+[DEBUG-rtos] Tmr Svc           -1  0.00       0  2436
+[DEBUG-c99] 4191ms: flush 2/s touchPressed 0/s handlerBusy 91% calls 2/s
+[DEBUG-c99] 4927ms: flush 2/s touchPressed 0/s handlerBusy 99% calls 2/s
